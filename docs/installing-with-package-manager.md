@@ -1,20 +1,20 @@
 ## Installation With Package Manager
 
-Lapce is available in below software repositories:
+Phidi is available in below software repositories:
 
-[![Packaging status](https://repology.org/badge/vertical-allrepos/lapce.svg)](https://repology.org/project/lapce/versions)
+[![Packaging status](https://repology.org/badge/vertical-allrepos/phidi.svg)](https://repology.org/project/phidi/versions)
 
-Lapce is also additionally available via:
+Phidi is also additionally available via:
 
-- [Flatpak](https://flathub.org/apps/details/dev.lapce.lapce)
-- [Scoop](https://scoop.sh/#/apps?q=lapce)
+- [Flatpak](https://flathub.org/apps/details/dev.phidi.phidi)
+- [Scoop](https://scoop.sh/#/apps?q=phidi)
 
 
-For Fedora Linux, Lapce is (unofficially) available via dnf RPM package manager, using nightly as of 2024.01:
+For Fedora Linux, Phidi is (unofficially) available via dnf RPM package manager, using nightly as of 2024.01:
 
-- [copr](https://copr.fedorainfracloud.org/coprs/titaniumtown/lapce/)
+- [copr](https://copr.fedorainfracloud.org/coprs/titaniumtown/phidi/)
 
 ```bash
-sudo dnf copr enable titaniumtown/lapce 
-sudo dnf install lapce
+sudo dnf copr enable titaniumtown/phidi
+sudo dnf install phidi
 ```

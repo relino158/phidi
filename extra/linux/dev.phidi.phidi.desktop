@@ -1,0 +1,20 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+
+Name=Phidi
+Comment=Lightning-fast and powerful code editor written in Rust
+Categories=Development;IDE;
+GenericName=Code Editor
+StartupWMClass=phidi
+
+Icon=dev.phidi.phidi
+Exec=phidi %F
+Terminal=false
+MimeType=text/plain;inode/directory;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=phidi --new %F
+Icon=dev.phidi.phidi

@@ -1,10 +1,10 @@
 #:schema ../extra/schemas/icon-theme.json
 
 [icon-theme]
-name = "Lapce Codicons"
+name = "Phidi Codicons"
 
 [icon-theme.ui]
-"logo" = "lapce_logo.svg"
+"logo" = "phidi_logo.svg"
 "menu" = "menu.svg"
 "link" = "link.svg"
 "error" = "error.svg"

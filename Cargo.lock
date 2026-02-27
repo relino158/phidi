@@ -2989,172 +2989,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lapce"
-version = "0.4.6"
-dependencies = [
- "lapce-app",
- "lapce-proxy",
-]
-
-[[package]]
-name = "lapce-app"
-version = "0.4.6"
-dependencies = [
- "Inflector",
- "alacritty_terminal",
- "anyhow",
- "backtrace",
- "base64 0.21.7",
- "bytemuck",
- "chrono",
- "clap",
- "config",
- "criterion",
- "crossbeam-channel",
- "dmg",
- "flate2",
- "floem",
- "fs_extra",
- "globset",
- "im",
- "include_dir",
- "indexmap",
- "interprocess",
- "itertools 0.12.1",
- "lapce-core",
- "lapce-proxy",
- "lapce-rpc",
- "lapce-xi-rope",
- "lsp-types",
- "notify",
- "nucleo",
- "once_cell",
- "open",
- "parking_lot",
- "percent-encoding",
- "pulldown-cmark",
- "rayon",
- "regex",
- "reqwest",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "smallvec",
- "structdesc",
- "strum 0.27.2",
- "strum_macros 0.27.2",
- "tar",
- "tempfile",
- "thiserror 1.0.69",
- "toml",
- "toml_edit 0.20.2",
- "tracing 0.2.0",
- "tracing-appender",
- "tracing-log",
- "tracing-subscriber",
- "unicode-width",
- "url",
- "windows-sys 0.45.0",
- "zip",
- "zstd",
-]
-
-[[package]]
-name = "lapce-core"
-version = "0.4.6"
-dependencies = [
- "ahash",
- "anyhow",
- "arc-swap",
- "directories",
- "floem-editor-core",
- "git2",
- "hashbrown 0.14.5",
- "include_dir",
- "itertools 0.12.1",
- "lapce-rpc",
- "lapce-xi-rope",
- "libloading",
- "lsp-types",
- "once_cell",
- "regex",
- "remain",
- "slotmap",
- "strum 0.27.2",
- "strum_macros 0.27.2",
- "thiserror 1.0.69",
- "tracing 0.2.0",
- "tree-sitter",
-]
-
-[[package]]
-name = "lapce-proxy"
-version = "0.4.6"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "clap",
- "crossbeam-channel",
- "directories",
- "dyn-clone",
- "flate2",
- "floem-editor-core",
- "git2",
- "globset",
- "grep-matcher",
- "grep-regex",
- "grep-searcher",
- "ignore",
- "indexmap",
- "interprocess",
- "jsonrpc-lite",
- "lapce-core",
- "lapce-rpc",
- "lapce-xi-rope",
- "libc",
- "locale_config",
- "lsp-types",
- "notify",
- "parking_lot",
- "polling",
- "psp-types",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "tar",
- "toml",
- "tracing 0.2.0",
- "tracing-log",
- "trash",
- "url",
- "walkdir",
- "wasi-common",
- "wasi-experimental-http-wasmtime",
- "wasmtime",
- "wasmtime-wasi",
- "zstd",
-]
-
-[[package]]
-name = "lapce-rpc"
-version = "0.4.6"
-dependencies = [
- "anyhow",
- "crossbeam-channel",
- "human-sort",
- "indexmap",
- "lapce-xi-rope",
- "lsp-types",
- "parking_lot",
- "serde",
- "serde_json",
- "tracing 0.2.0",
- "url",
-]
-
-[[package]]
 name = "lapce-xi-rope"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4126,6 +3960,172 @@ name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
+
+[[package]]
+name = "phidi"
+version = "0.4.6"
+dependencies = [
+ "phidi-app",
+ "phidi-proxy",
+]
+
+[[package]]
+name = "phidi-app"
+version = "0.4.6"
+dependencies = [
+ "Inflector",
+ "alacritty_terminal",
+ "anyhow",
+ "backtrace",
+ "base64 0.21.7",
+ "bytemuck",
+ "chrono",
+ "clap",
+ "config",
+ "criterion",
+ "crossbeam-channel",
+ "dmg",
+ "flate2",
+ "floem",
+ "fs_extra",
+ "globset",
+ "im",
+ "include_dir",
+ "indexmap",
+ "interprocess",
+ "itertools 0.12.1",
+ "lapce-xi-rope",
+ "lsp-types",
+ "notify",
+ "nucleo",
+ "once_cell",
+ "open",
+ "parking_lot",
+ "percent-encoding",
+ "phidi-core",
+ "phidi-proxy",
+ "phidi-rpc",
+ "pulldown-cmark",
+ "rayon",
+ "regex",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "smallvec",
+ "structdesc",
+ "strum 0.27.2",
+ "strum_macros 0.27.2",
+ "tar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+ "toml_edit 0.20.2",
+ "tracing 0.2.0",
+ "tracing-appender",
+ "tracing-log",
+ "tracing-subscriber",
+ "unicode-width",
+ "url",
+ "windows-sys 0.60.2",
+ "zip",
+ "zstd",
+]
+
+[[package]]
+name = "phidi-core"
+version = "0.4.6"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "arc-swap",
+ "directories",
+ "floem-editor-core",
+ "git2",
+ "hashbrown 0.14.5",
+ "include_dir",
+ "itertools 0.12.1",
+ "lapce-xi-rope",
+ "libloading",
+ "lsp-types",
+ "once_cell",
+ "phidi-rpc",
+ "regex",
+ "remain",
+ "slotmap",
+ "strum 0.27.2",
+ "strum_macros 0.27.2",
+ "thiserror 1.0.69",
+ "tracing 0.2.0",
+ "tree-sitter",
+]
+
+[[package]]
+name = "phidi-proxy"
+version = "0.4.6"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "clap",
+ "crossbeam-channel",
+ "directories",
+ "dyn-clone",
+ "flate2",
+ "floem-editor-core",
+ "git2",
+ "globset",
+ "grep-matcher",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "indexmap",
+ "interprocess",
+ "jsonrpc-lite",
+ "lapce-xi-rope",
+ "libc",
+ "locale_config",
+ "lsp-types",
+ "notify",
+ "parking_lot",
+ "phidi-core",
+ "phidi-rpc",
+ "polling",
+ "psp-types",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tar",
+ "toml",
+ "tracing 0.2.0",
+ "tracing-log",
+ "trash",
+ "url",
+ "walkdir",
+ "wasi-common",
+ "wasi-experimental-http-wasmtime",
+ "wasmtime",
+ "wasmtime-wasi",
+ "zstd",
+]
+
+[[package]]
+name = "phidi-rpc"
+version = "0.4.6"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "human-sort",
+ "indexmap",
+ "lapce-xi-rope",
+ "lsp-types",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tracing 0.2.0",
+ "url",
+]
 
 [[package]]
 name = "pico-args"
@@ -6189,7 +6189,7 @@ dependencies = [
 [[package]]
 name = "wasi-experimental-http-wasmtime"
 version = "0.10.0"
-source = "git+https://github.com/lapce/wasi-experimental-http#21419eb785cb583ead180f25a9685fa16de7f326"
+source = "git+https://github.com/lapce/wasi-experimental-http?rev=21419eb785cb583ead180f25a9685fa16de7f326#21419eb785cb583ead180f25a9685fa16de7f326"
 dependencies = [
  "anyhow",
  "bytes",
@@ -7006,7 +7006,7 @@ version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0978bf7171b3d90bac376700cb56d606feb40f251a475a5d6634613564460b22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

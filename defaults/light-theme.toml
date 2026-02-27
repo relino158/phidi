@@ -1,7 +1,7 @@
 #:schema ../extra/schemas/color-theme.json
 
 [color-theme]
-name = "Lapce Light"
+name = "Phidi Light"
 
 [ui]
 font-family = ""
@@ -88,38 +88,38 @@ dim-text = "#A0A1A7"
 "bracket.unpaired" = "$red"
 
 [color-theme.ui]
-"lapce.error" = "#E51400"
-"lapce.warn" = "#E9A700"
-"lapce.dropdown_shadow" = "#B4B4B4"
-"lapce.border" = "#B4B4B4"
-"lapce.scroll_bar" = "#B4B4B4BB"
+"phidi.error" = "#E51400"
+"phidi.warn" = "#E9A700"
+"phidi.dropdown_shadow" = "#B4B4B4"
+"phidi.border" = "#B4B4B4"
+"phidi.scroll_bar" = "#B4B4B4BB"
 
-"lapce.button.primary.background" = "#50a14f"
-"lapce.button.primary.foreground" = "$white"
+"phidi.button.primary.background" = "#50a14f"
+"phidi.button.primary.foreground" = "$white"
 
 # tab
-"lapce.tab.active.background" = "$primary-background"
-"lapce.tab.active.foreground" = "$text"
-"lapce.tab.active.underline" = "#528BFF"
+"phidi.tab.active.background" = "$primary-background"
+"phidi.tab.active.foreground" = "$text"
+"phidi.tab.active.underline" = "#528BFF"
 
-"lapce.tab.inactive.background" = "#EAEAEB"
-"lapce.tab.inactive.foreground" = "$text"
-"lapce.tab.inactive.underline" = "#528BFF77"
+"phidi.tab.inactive.background" = "#EAEAEB"
+"phidi.tab.inactive.foreground" = "$text"
+"phidi.tab.inactive.underline" = "#528BFF77"
 
-"lapce.tab.separator" = "#B4B4B4"
+"phidi.tab.separator" = "#B4B4B4"
 
-"lapce.icon.active" = "$text"
-"lapce.icon.inactive" = "$dim-text"
+"phidi.icon.active" = "$text"
+"phidi.icon.inactive" = "$dim-text"
 
-"lapce.remote.icon" = "$white"
-"lapce.remote.local" = "#4078F2"
-"lapce.remote.connected" = "#50A14F"
-"lapce.remote.connecting" = "#C18401"
-"lapce.remote.disconnected" = "#E45649"
+"phidi.remote.icon" = "$white"
+"phidi.remote.local" = "#4078F2"
+"phidi.remote.connected" = "#50A14F"
+"phidi.remote.connecting" = "#C18401"
+"phidi.remote.disconnected" = "#E45649"
 
-"lapce.plugin.name" = "#444444"
-"lapce.plugin.description" = "$text"
-"lapce.plugin.author" = "#707070"
+"phidi.plugin.name" = "#444444"
+"phidi.plugin.description" = "$text"
+"phidi.plugin.author" = "#707070"
 
 "terminal.cursor" = "$text"
 "terminal.foreground" = "$text"

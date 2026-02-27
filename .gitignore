@@ -1,5 +1,5 @@
 .vscode
-.lapce
+.phidi
 .idea
 .fleet
 shell.nix
@@ -10,3 +10,4 @@ vendor/
 
 .DS_Store
 *.patch
+.gitnexus

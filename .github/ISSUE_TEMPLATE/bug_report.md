@@ -7,9 +7,9 @@ assignees: ''
 
 ---
 
-## Lapce Version
+## Phidi Version
 
-The Lapce version you are using, which can be found in "About Lapce" at the top right settings icon. 
+The Phidi version you are using, which can be found in "About Phidi" at the top right settings icon.
 
 ## System information
 

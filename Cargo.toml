@@ -1,33 +1,33 @@
 [package]
-name         = "lapce"
+name         = "phidi"
 version      = { workspace = true }
 authors      = { workspace = true }
 edition      = { workspace = true }
 license      = { workspace = true }
 rust-version = { workspace = true }
-default-run  = "lapce"
+default-run  = "phidi"
 
 [dependencies]
-lapce-app   = { path = "./lapce-app" }
-lapce-proxy = { path = "./lapce-proxy" }
+phidi-app   = { path = "./phidi-app" }
+phidi-proxy = { path = "./phidi-proxy" }
 
 [[bin]]
-name = "lapce"
-path = "lapce-app/src/bin/lapce.rs"
+name = "phidi"
+path = "phidi-app/src/bin/phidi.rs"
 
 [[bin]]
-name = "lapce-proxy"
-path = "lapce-proxy/src/bin/lapce-proxy.rs"
+name = "phidi-proxy"
+path = "phidi-proxy/src/bin/phidi-proxy.rs"
 
 [workspace]
-members = ["lapce-app", "lapce-proxy", "lapce-rpc", "lapce-core"]
+members = ["phidi-app", "phidi-proxy", "phidi-rpc", "phidi-core"]
 
 [workspace.package]
 version      = "0.4.6"
 edition      = "2024"
 rust-version = "1.87.0"
 license      = "Apache-2.0"
-homepage     = "https://lapce.dev"
+homepage     = "https://phidi.dev"
 authors      = ["Dongdong Zhou <dzhou121@gmail.com>"]
 
 [workspace.dependencies]
@@ -70,11 +70,11 @@ zstd              = { version = "0.11.2" }                                      
 lsp-types = { version = "0.95.1", features = ["proposed"] }                                                  # not following semver, so should be locked to patch version updates only
 psp-types = { git = "https://github.com/lapce/psp-types", rev = "f7fea28f59e7b2d6faa1034a21679ad49b3524ad" }
 
-lapce-xi-rope = { version = "0.3.2", features = ["serde"] }
+phidi-xi-rope = { package = "lapce-xi-rope", version = "0.3.2", features = ["serde"] }
 
-lapce-core  = { path = "./lapce-core" }
-lapce-rpc   = { path = "./lapce-rpc" }
-lapce-proxy = { path = "./lapce-proxy" }
+phidi-core  = { path = "./phidi-core" }
+phidi-rpc   = { path = "./phidi-rpc" }
+phidi-proxy = { path = "./phidi-proxy" }
 
 floem = { git = "https://github.com/lapce/floem", rev = "e0dd862564e3afbad5cba8ebe60df166a7a41e56", features = ["editor", "serde", "default-image-formats", "rfd-async-std"] }
 # floem = { path = "../floem", features = ["editor", "serde", "default-image-formats", "rfd-async-std"] }
@@ -125,13 +125,13 @@ lto           = true
 codegen-units = 1
 
 # A profile which compiles all (non-workspace) dependencies in release mode
-# but Lapce code in dev mode. This gives a good debugging experience for your
+# but Phidi code in dev mode. This gives a good debugging experience for your
 # code and fast performance of other people's code. After the initial
 # build subsequent ones are as fast as dev mode builds.
 # See https://doc.rust-lang.org/cargo/reference/profiles.html
 # To use this profile:
 #   cargo build --profile fastdev
-#   cargo run --profile fastdev --bin lapce
+#   cargo run --profile fastdev --bin phidi
 [profile.fastdev.package."*"]
 opt-level = 3
 

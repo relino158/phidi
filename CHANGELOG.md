@@ -6,6 +6,19 @@
 
 ### Bug Fixes
 
+## Phidi init
+
+### Features/Changes
+- Forked and renamed to start project Phidi.
+- Updated README.md.
+
+### Bug Fixes
+- Fixed broken git dependency sources introduced during rename by restoring upstream third-party repositories (lapce/*) where required, so dependency resolution works again.
+- Fixed wasi-experimental-http compatibility by pinning it to the known-good commit used by the project, resolving wasmtime feature/version mismatch during build.
+- Fixed crate resolution for renamed rope dependency by mapping phidi-xi-rope to published package lapce-xi-rope.
+- Fixed workspace binary output collisions (phidi / phidi-proxy) by disabling subcrate auto-bin generation and keeping a single canonical binary owner.
+- Removed unconditional phidi-core build script warnings and kept warnings only for actual git metadata lookup failures.
+
 ## 0.4.6
 
 ### Features/Changes

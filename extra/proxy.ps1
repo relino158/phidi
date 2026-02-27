@@ -4,10 +4,10 @@ param(
     [string]$directory
 )
 
-$proxy = (Join-Path $directory 'lapce.exe')
+$proxy = (Join-Path $directory 'phidi.exe')
 
-$LapceProcesses = (Get-Process -Name 'lapce' -EA SilentlyContinue).Count
-if ($LapceProcesses -ne 0) {
+$PhidiProcesses = (Get-Process -Name 'phidi' -EA SilentlyContinue).Count
+if ($PhidiProcesses -ne 0) {
     Write-Host 'Proxy currently in use. Aborting installation'
     exit
 }
@@ -24,8 +24,8 @@ switch ($env:PROCESSOR_ARCHITECTURE) {
     }
 }
 
-$url = "https://github.com/lapce/lapce/releases/download/${version}/lapce-proxy-windows-${arch}.gz"
-$gzip = Join-Path "${env:TMP}" "lapce-proxy-windows-${arch}.gz"
+$url = "https://github.com/phidi/phidi/releases/download/${version}/phidi-proxy-windows-${arch}.gz"
+$gzip = Join-Path "${env:TMP}" "phidi-proxy-windows-${arch}.gz"
 
 $webclient = [System.Net.WebClient]::new()
 $webclient.DownloadFile($url, $gzip)
@@ -44,4 +44,4 @@ $archive.close()
 
 [System.IO.File]::Delete($gzip)
 
-Write-Host 'lapce-proxy installed'
+Write-Host 'phidi-proxy installed'
