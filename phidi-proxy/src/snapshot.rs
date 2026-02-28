@@ -5,11 +5,12 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, ensure};
+use git2::{ErrorCode::NotFound, Repository, StatusOptions};
 use phidi_core::{
     directory::Directory,
     semantic_map::{
         CURRENT_SCHEMA_VERSION, SchemaCompatibility, SchemaVersion,
-        WorkspaceSnapshot,
+        SnapshotFreshness, SnapshotProvenance, WorkspaceSnapshot,
     },
 };
 use phidi_rpc::core::{CoreRpcHandler, LogLevel};
@@ -196,6 +197,88 @@ struct SnapshotHeader {
     schema_version: SchemaVersion,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotFreshnessStatus {
+    pub freshness: SnapshotFreshness,
+    pub guidance: RebuildGuidance,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RebuildGuidance {
+    None,
+    Recommended(String),
+    Required(String),
+}
+
+pub fn capture_workspace_provenance(
+    workspace_path: &Path,
+) -> Result<SnapshotProvenance> {
+    let repo = match Repository::discover(workspace_path) {
+        Ok(repo) => repo,
+        Err(error) if error.code() == NotFound => {
+            return Ok(SnapshotProvenance::default());
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    Ok(SnapshotProvenance {
+        revision: current_revision(&repo)?,
+        has_uncommitted_changes: has_uncommitted_changes(&repo)?,
+    })
+}
+
+pub fn evaluate_snapshot_freshness(
+    snapshot: &WorkspaceSnapshot,
+    workspace_provenance: &SnapshotProvenance,
+) -> SnapshotFreshnessStatus {
+    match snapshot.schema_compatibility() {
+        SchemaCompatibility::Current | SchemaCompatibility::Compatible => {}
+        SchemaCompatibility::TooOld | SchemaCompatibility::TooNew => {
+            return SnapshotFreshnessStatus {
+                freshness: SnapshotFreshness::Incompatible,
+                guidance: RebuildGuidance::Required(format!(
+                    "Rebuild required: snapshot schema {} is not readable by this build.",
+                    snapshot.schema_version
+                )),
+            };
+        }
+    }
+
+    let freshness = match (
+        snapshot.provenance.revision.as_deref(),
+        workspace_provenance.revision.as_deref(),
+    ) {
+        (Some(snapshot_revision), Some(workspace_revision)) => {
+            if snapshot_revision == workspace_revision {
+                if workspace_provenance.has_uncommitted_changes {
+                    SnapshotFreshness::Drifted
+                } else if snapshot.provenance.has_uncommitted_changes {
+                    SnapshotFreshness::Outdated
+                } else {
+                    SnapshotFreshness::Exact
+                }
+            } else {
+                SnapshotFreshness::Outdated
+            }
+        }
+        (None, None) => {
+            if workspace_provenance.has_uncommitted_changes {
+                SnapshotFreshness::Drifted
+            } else if snapshot.provenance.has_uncommitted_changes {
+                SnapshotFreshness::Outdated
+            } else {
+                SnapshotFreshness::Exact
+            }
+        }
+        _ => SnapshotFreshness::Incompatible,
+    };
+
+    SnapshotFreshnessStatus {
+        guidance: guidance_for(snapshot, workspace_provenance, freshness),
+        freshness,
+    }
+}
+
 pub(crate) fn load_workspace_snapshot_for_startup(
     core_rpc: &CoreRpcHandler,
     workspace_root: &Path,
@@ -252,6 +335,58 @@ fn load_workspace_snapshot_for_startup_with_store(
     }
 }
 
+fn current_revision(repo: &Repository) -> Result<Option<String>> {
+    match repo.head() {
+        Ok(head) => Ok(head
+            .target()
+            .or_else(|| head.peel_to_commit().ok().map(|commit| commit.id()))
+            .map(|oid| oid.to_string())),
+        Err(error) if error.code() == NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn has_uncommitted_changes(repo: &Repository) -> Result<bool> {
+    let mut options = StatusOptions::new();
+    options.include_untracked(true).recurse_untracked_dirs(true);
+    let statuses = repo.statuses(Some(&mut options))?;
+    Ok(statuses.iter().next().is_some())
+}
+
+fn guidance_for(
+    snapshot: &WorkspaceSnapshot,
+    workspace_provenance: &SnapshotProvenance,
+    freshness: SnapshotFreshness,
+) -> RebuildGuidance {
+    match freshness {
+        SnapshotFreshness::Exact => RebuildGuidance::None,
+        SnapshotFreshness::Drifted => RebuildGuidance::Recommended(
+            "Rebuild recommended: workspace has uncommitted changes.".to_string(),
+        ),
+        SnapshotFreshness::Outdated => match (
+            snapshot.provenance.revision.as_deref(),
+            workspace_provenance.revision.as_deref(),
+        ) {
+            (Some(snapshot_revision), Some(workspace_revision))
+                if snapshot_revision != workspace_revision =>
+            {
+                RebuildGuidance::Required(format!(
+                    "Rebuild required: snapshot was built from revision {}, current workspace is at {}.",
+                    snapshot_revision, workspace_revision
+                ))
+            }
+            _ => RebuildGuidance::Required(
+                "Rebuild required: snapshot no longer matches the current workspace state."
+                    .to_string(),
+            ),
+        },
+        SnapshotFreshness::Incompatible => RebuildGuidance::Required(
+            "Rebuild required: snapshot provenance cannot be compared to this workspace."
+                .to_string(),
+        ),
+    }
+}
+
 fn workspace_directory_name(workspace_root: &Path) -> String {
     url::form_urlencoded::Serializer::new(String::new())
         .append_key_only(&workspace_root.to_string_lossy())
@@ -260,19 +395,21 @@ fn workspace_directory_name(workspace_root: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{fs, path::Path, path::PathBuf};
 
+    use git2::{Repository, Signature};
     use phidi_core::semantic_map::{
         CURRENT_SCHEMA_VERSION, SchemaCompatibility, SchemaVersion, SnapshotKind,
-        SnapshotProvenance, WorkspaceSnapshot,
+        SnapshotFreshness, SnapshotProvenance, WorkspaceSnapshot,
     };
     use phidi_rpc::core::{CoreNotification, CoreRpc, CoreRpcHandler, LogLevel};
     use serde_json::json;
     use tempfile::tempdir;
 
     use super::{
-        SNAPSHOT_LOG_TARGET, SnapshotLoadResult, SnapshotRecoveryStatus,
-        SnapshotStore, load_workspace_snapshot_for_startup_with_store,
+        RebuildGuidance, SNAPSHOT_LOG_TARGET, SnapshotLoadResult,
+        SnapshotRecoveryStatus, SnapshotStore, capture_workspace_provenance,
+        evaluate_snapshot_freshness, load_workspace_snapshot_for_startup_with_store,
     };
 
     fn snapshot_fixture() -> WorkspaceSnapshot {
@@ -452,5 +589,185 @@ mod tests {
         assert!(matches!(level, LogLevel::Warn));
         assert_eq!(target.as_deref(), Some(SNAPSHOT_LOG_TARGET));
         assert!(message.contains("Ignoring incompatible workspace snapshot"));
+    }
+
+    #[test]
+    fn evaluates_matching_clean_commit_as_exact() {
+        let fixture = GitFixture::new();
+        let provenance = capture_workspace_provenance(fixture.path()).unwrap();
+        let snapshot = WorkspaceSnapshot::new(SnapshotKind::Working, provenance);
+
+        let status = evaluate_snapshot_freshness(&snapshot, &snapshot.provenance);
+
+        assert_eq!(status.freshness, SnapshotFreshness::Exact);
+        assert_eq!(status.guidance, RebuildGuidance::None);
+    }
+
+    #[test]
+    fn evaluates_matching_commit_with_dirty_workspace_as_drifted() {
+        let fixture = GitFixture::new();
+        let clean_provenance = capture_workspace_provenance(fixture.path()).unwrap();
+        fixture.write("src/lib.rs", "pub fn value() -> u8 { 2 }\n");
+        let workspace_provenance =
+            capture_workspace_provenance(fixture.path()).unwrap();
+        let snapshot =
+            WorkspaceSnapshot::new(SnapshotKind::Working, clean_provenance);
+
+        let status = evaluate_snapshot_freshness(&snapshot, &workspace_provenance);
+
+        assert_eq!(status.freshness, SnapshotFreshness::Drifted);
+        assert_eq!(
+            status.guidance,
+            RebuildGuidance::Recommended(
+                "Rebuild recommended: workspace has uncommitted changes."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn evaluates_revision_change_as_outdated() {
+        let fixture = GitFixture::new();
+        let initial_provenance =
+            capture_workspace_provenance(fixture.path()).unwrap();
+        fixture.write("src/lib.rs", "pub fn value() -> u8 { 2 }\n");
+        fixture.commit_all("second");
+        let workspace_provenance =
+            capture_workspace_provenance(fixture.path()).unwrap();
+        let snapshot = WorkspaceSnapshot::new(
+            SnapshotKind::Working,
+            initial_provenance.clone(),
+        );
+
+        let status = evaluate_snapshot_freshness(&snapshot, &workspace_provenance);
+
+        assert_eq!(status.freshness, SnapshotFreshness::Outdated);
+        assert_eq!(
+            status.guidance,
+            RebuildGuidance::Required(format!(
+                "Rebuild required: snapshot was built from revision {}, current workspace is at {}.",
+                initial_provenance.revision.unwrap(),
+                workspace_provenance.revision.unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn evaluates_uncomparable_provenance_as_incompatible() {
+        let fixture = GitFixture::new();
+        let workspace_provenance =
+            capture_workspace_provenance(fixture.path()).unwrap();
+        let snapshot = WorkspaceSnapshot::new(
+            SnapshotKind::Working,
+            SnapshotProvenance {
+                revision: None,
+                has_uncommitted_changes: false,
+            },
+        );
+
+        let status = evaluate_snapshot_freshness(&snapshot, &workspace_provenance);
+
+        assert_eq!(status.freshness, SnapshotFreshness::Incompatible);
+        assert_eq!(
+            status.guidance,
+            RebuildGuidance::Required(
+                "Rebuild required: snapshot provenance cannot be compared to this workspace."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn evaluates_schema_mismatch_as_incompatible() {
+        let fixture = GitFixture::new();
+        let provenance = capture_workspace_provenance(fixture.path()).unwrap();
+        let mut snapshot = WorkspaceSnapshot::new(SnapshotKind::Working, provenance);
+        snapshot.schema_version =
+            SchemaVersion::new(CURRENT_SCHEMA_VERSION.major + 1, 0);
+
+        let status = evaluate_snapshot_freshness(&snapshot, &snapshot.provenance);
+
+        assert_eq!(status.freshness, SnapshotFreshness::Incompatible);
+        assert_eq!(
+            status.guidance,
+            RebuildGuidance::Required(format!(
+                "Rebuild required: snapshot schema {} is not readable by this build.",
+                snapshot.schema_version
+            ))
+        );
+    }
+
+    struct GitFixture {
+        tempdir: tempfile::TempDir,
+        repo: Repository,
+    }
+
+    impl GitFixture {
+        fn new() -> Self {
+            let tempdir = tempdir().unwrap();
+            let repo = Repository::init(tempdir.path()).unwrap();
+            let fixture = Self { tempdir, repo };
+            fixture.write("src/lib.rs", "pub fn value() -> u8 { 1 }\n");
+            fixture.commit_all("initial");
+            fixture
+        }
+
+        fn path(&self) -> &Path {
+            self.tempdir.path()
+        }
+
+        fn write(&self, relative_path: &str, contents: &str) {
+            let path = self.path().join(relative_path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, contents).unwrap();
+        }
+
+        fn commit_all(&self, message: &str) {
+            let mut index = self.repo.index().unwrap();
+            index
+                .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+                .unwrap();
+            index.write().unwrap();
+
+            let tree_id = index.write_tree().unwrap();
+            let tree = self.repo.find_tree(tree_id).unwrap();
+            let signature =
+                Signature::now("Phidi Tests", "tests@phidi.dev").unwrap();
+            let parent = self
+                .repo
+                .head()
+                .ok()
+                .and_then(|head| head.target())
+                .and_then(|oid| self.repo.find_commit(oid).ok());
+
+            match parent {
+                Some(parent) => {
+                    self.repo
+                        .commit(
+                            Some("HEAD"),
+                            &signature,
+                            &signature,
+                            message,
+                            &tree,
+                            &[&parent],
+                        )
+                        .unwrap();
+                }
+                None => {
+                    self.repo
+                        .commit(
+                            Some("HEAD"),
+                            &signature,
+                            &signature,
+                            message,
+                            &tree,
+                            &[],
+                        )
+                        .unwrap();
+                }
+            }
+        }
     }
 }
