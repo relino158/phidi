@@ -9,10 +9,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
 /// The newest snapshot schema this build knows how to emit.
-pub const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
+pub const CURRENT_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 1);
 
 /// The oldest snapshot schema this build promises to read without migration.
-pub const MINIMUM_READABLE_SCHEMA_VERSION: SchemaVersion = CURRENT_SCHEMA_VERSION;
+pub const MINIMUM_READABLE_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1, 0);
 
 /// Persisted semantic-map artifact for one workspace.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -410,38 +410,43 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        CURRENT_SCHEMA_VERSION, Certainty, ConfidenceScore, EntityId,
-        InvalidConfidenceScore, ProvenanceSource, RelationshipKind,
-        RelationshipProvenance, SchemaCompatibility, SchemaVersion,
-        SemanticRelationship, SnapshotKind, SnapshotProvenance, WorkspaceSnapshot,
+        CURRENT_SCHEMA_VERSION, MINIMUM_READABLE_SCHEMA_VERSION, Certainty,
+        ConfidenceScore, EntityId, InvalidConfidenceScore, ProvenanceSource,
+        RelationshipKind, RelationshipProvenance, SchemaCompatibility,
+        SchemaVersion, SemanticRelationship, SnapshotKind, SnapshotProvenance,
+        WorkspaceSnapshot,
     };
 
     #[test]
     fn schema_version_compatibility_follows_supported_range() {
-        let readable = SchemaVersion::new(1, 0);
-        let compatible = SchemaVersion::new(1, 1);
-        let older_major = SchemaVersion::new(0, 9);
-        let newer_minor = SchemaVersion::new(1, 3);
+        let previous_minor = MINIMUM_READABLE_SCHEMA_VERSION;
+        let too_old = SchemaVersion::new(
+            CURRENT_SCHEMA_VERSION.major - 1,
+            CURRENT_SCHEMA_VERSION.minor,
+        );
+        let too_new = SchemaVersion::new(
+            CURRENT_SCHEMA_VERSION.major,
+            CURRENT_SCHEMA_VERSION.minor + 1,
+        );
 
         assert_eq!(
             CURRENT_SCHEMA_VERSION.compatibility_with_current(),
             SchemaCompatibility::Current
         );
         assert_eq!(
-            readable.compatibility_with_current(),
-            SchemaCompatibility::Current
-        );
-        assert_eq!(
-            compatible
-                .compatibility(SchemaVersion::new(1, 2), SchemaVersion::new(1, 0)),
+            MINIMUM_READABLE_SCHEMA_VERSION.compatibility_with_current(),
             SchemaCompatibility::Compatible
         );
         assert_eq!(
-            older_major.compatibility_with_current(),
+            previous_minor.compatibility_with_current(),
+            SchemaCompatibility::Compatible
+        );
+        assert_eq!(
+            too_old.compatibility_with_current(),
             SchemaCompatibility::TooOld
         );
         assert_eq!(
-            newer_minor.compatibility_with_current(),
+            too_new.compatibility_with_current(),
             SchemaCompatibility::TooNew
         );
     }

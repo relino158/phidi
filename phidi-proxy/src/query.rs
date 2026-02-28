@@ -834,10 +834,7 @@ fn usize_limit(limit: u32) -> usize {
 }
 
 fn depth_to_u32(depth: usize) -> u32 {
-    match u32::try_from(depth) {
-        Ok(depth) => depth,
-        Err(_) => u32::MAX,
-    }
+    u32::try_from(depth).unwrap_or(u32::MAX)
 }
 
 fn diff_lookup_paths(workspace_root: &Path, diff: &FileDiff) -> Vec<String> {
