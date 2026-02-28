@@ -10,6 +10,7 @@ rust-version = { workspace = true }
 directories  = { workspace = true }
 itertools    = { workspace = true }
 once_cell    = { workspace = true }
+serde        = { workspace = true, features = ["derive"] }
 strum        = { workspace = true }
 strum_macros = { workspace = true }
 thiserror    = { workspace = true }
@@ -41,3 +42,6 @@ anyhow = { workspace = true }
 
 [target.'cfg(not(target_os = "linux"))'.build-dependencies]
 git2   = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
