@@ -532,6 +532,7 @@ mod tests {
         load_workspace_snapshot_for_startup_with_store,
     };
 
+    // Canonical snapshot fixture for schema, freshness, and recovery contract tests.
     fn snapshot_fixture() -> WorkspaceSnapshot {
         WorkspaceSnapshot::new(
             SnapshotKind::Working,
@@ -827,6 +828,54 @@ mod tests {
         assert!(matches!(level, LogLevel::Warn));
         assert_eq!(target.as_deref(), Some(SNAPSHOT_LOG_TARGET));
         assert!(message.contains("Ignoring incompatible workspace snapshot"));
+
+        let CoreNotification::SemanticMapStatus { status } =
+            recv_notification(&core_rpc)
+        else {
+            panic!("expected semantic-map status notification");
+        };
+        assert!(matches!(
+            status,
+            SemanticMapStatus::Degraded {
+                reason: SemanticMapDegradedReason::SnapshotRecovery,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn startup_safe_load_path_logs_corrupt_snapshots_with_location_details() {
+        let tempdir = tempdir().unwrap();
+        let store_root = tempdir.path().join("snapshots");
+        let store = SnapshotStore::from_directory(store_root.clone());
+        let workspace_root = workspace_root(&tempdir);
+        fs::create_dir_all(&workspace_root).unwrap();
+
+        let snapshot_path = snapshot_path_for(&store, &workspace_root);
+        fs::write(&snapshot_path, b"{\n  \"schema_version\":\n").unwrap();
+
+        let core_rpc = CoreRpcHandler::new();
+        let startup_store = SnapshotStore::from_directory(store_root);
+        load_workspace_snapshot_for_startup_with_store(
+            &startup_store,
+            &core_rpc,
+            &workspace_root,
+        );
+
+        let CoreNotification::Log {
+            level,
+            message,
+            target,
+        } = recv_notification(&core_rpc)
+        else {
+            panic!("expected log notification");
+        };
+
+        assert!(matches!(level, LogLevel::Warn));
+        assert_eq!(target.as_deref(), Some(SNAPSHOT_LOG_TARGET));
+        assert!(message.contains("Ignoring corrupt workspace snapshot"));
+        assert!(message.contains("line"));
+        assert!(message.contains("column"));
 
         let CoreNotification::SemanticMapStatus { status } =
             recv_notification(&core_rpc)

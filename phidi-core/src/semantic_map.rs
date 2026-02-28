@@ -513,4 +513,27 @@ mod tests {
             json!("heuristic")
         );
     }
+
+    #[test]
+    fn workspace_snapshot_serializes_foundation_contract_fields_stably() {
+        let mut snapshot = WorkspaceSnapshot::new(
+            SnapshotKind::Working,
+            SnapshotProvenance {
+                revision: Some("abc123".to_string()),
+                has_uncommitted_changes: false,
+            },
+        );
+        snapshot.completeness = super::SnapshotCompleteness::Partial;
+
+        let value = serde_json::to_value(snapshot).unwrap();
+
+        assert_eq!(
+            value["schema_version"],
+            json!({
+                "major": CURRENT_SCHEMA_VERSION.major,
+                "minor": CURRENT_SCHEMA_VERSION.minor
+            })
+        );
+        assert_eq!(value["completeness"], json!("partial"));
+    }
 }
