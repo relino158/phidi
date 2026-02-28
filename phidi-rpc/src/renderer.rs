@@ -1,6 +1,7 @@
 //! Typed renderer-plugin ABI records for host probing and compatibility checks.
 
 use std::ffi::c_char;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +68,12 @@ impl RendererAbiVersion {
     }
 }
 
+impl fmt::Display for RendererAbiVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
 /// Result of comparing a plugin ABI version with the current host.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -79,6 +86,52 @@ pub enum RendererAbiCompatibility {
     TooOld,
     /// Newer than the host understands.
     TooNew,
+}
+
+/// Closed range of renderer ABI versions and host API version understood by one host.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RendererHostSupport {
+    /// Newest renderer ABI revision the host can load.
+    pub current_abi_version: RendererAbiVersion,
+    /// Oldest renderer ABI revision the host promises to read.
+    pub minimum_abi_version: RendererAbiVersion,
+    /// Concrete host-side renderer API version provided by this build.
+    pub host_api_version: String,
+}
+
+impl RendererHostSupport {
+    /// Creates one host support description.
+    pub fn new(
+        current_abi_version: RendererAbiVersion,
+        minimum_abi_version: RendererAbiVersion,
+        host_api_version: impl Into<String>,
+    ) -> Self {
+        Self {
+            current_abi_version,
+            minimum_abi_version,
+            host_api_version: host_api_version.into(),
+        }
+    }
+
+    /// Support window compiled into the current build.
+    pub fn current_build(host_api_version: impl Into<String>) -> Self {
+        Self::new(
+            CURRENT_RENDERER_ABI_VERSION,
+            MINIMUM_RENDERER_ABI_VERSION,
+            host_api_version,
+        )
+    }
+
+    fn abi_window(&self) -> String {
+        if self.current_abi_version == self.minimum_abi_version {
+            self.current_abi_version.to_string()
+        } else {
+            format!(
+                "{} through {}",
+                self.minimum_abi_version, self.current_abi_version
+            )
+        }
+    }
 }
 
 /// Raw v1 descriptor returned by a renderer plugin entrypoint.
@@ -139,17 +192,18 @@ pub enum RendererLoadStatus {
     /// The plugin ABI revision is outside the host's readable window.
     AbiMismatch {
         plugin: RendererPluginMetadata,
-        expected_abi_version: RendererAbiVersion,
+        host_support: RendererHostSupport,
         compatibility: RendererAbiCompatibility,
     },
     /// The plugin requires a newer or otherwise incompatible host API version.
     HostApiMismatch {
         plugin: RendererPluginMetadata,
-        host_api_version: String,
+        host_support: RendererHostSupport,
     },
     /// The plugin declared an invalid semver requirement for the host API.
     InvalidHostApiRequirement {
         plugin: RendererPluginMetadata,
+        host_support: RendererHostSupport,
         message: String,
     },
     /// The host API version string was invalid.
@@ -157,6 +211,92 @@ pub enum RendererLoadStatus {
         host_api_version: String,
         message: String,
     },
+}
+
+impl RendererLoadStatus {
+    /// Returns true when the renderer descriptor is compatible with the current host.
+    pub const fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
+
+    /// Stable user-facing guidance for logs and diagnostics.
+    pub fn actionable_message(&self) -> String {
+        match self {
+            Self::Ready { plugin } => format!(
+                "Renderer '{}' {} is compatible with host API {} and ABI {}.",
+                plugin.plugin_name,
+                plugin.plugin_version,
+                plugin.host_api_requirement,
+                plugin.abi_version
+            ),
+            Self::MissingEntry { symbol } => format!(
+                "Renderer plugin is missing the '{}' export. Rebuild it against the current phidi-rpc renderer contract.",
+                symbol
+            ),
+            Self::LoadFailure { message } => format!(
+                "Renderer plugin could not be loaded: {message}. Verify the library path and rebuild for this platform."
+            ),
+            Self::NullDescriptor { symbol } => format!(
+                "Renderer plugin returned a null descriptor from '{}'. Rebuild it against the current phidi-rpc renderer contract.",
+                symbol
+            ),
+            Self::InvalidDescriptor { message } => format!(
+                "Renderer descriptor is invalid: {message}. Rebuild the renderer against the current phidi-rpc contract."
+            ),
+            Self::AbiMismatch {
+                plugin,
+                host_support,
+                compatibility,
+            } => {
+                let compatibility_detail = match compatibility {
+                    RendererAbiCompatibility::Current
+                    | RendererAbiCompatibility::Compatible => "compatible",
+                    RendererAbiCompatibility::TooOld => "too old",
+                    RendererAbiCompatibility::TooNew => "too new",
+                };
+
+                format!(
+                    "Renderer '{}' {} uses ABI {} which is {} for this host. The host accepts ABI {}. Rebuild the renderer against ABI {} and host API {}.",
+                    plugin.plugin_name,
+                    plugin.plugin_version,
+                    plugin.abi_version,
+                    compatibility_detail,
+                    host_support.abi_window(),
+                    host_support.current_abi_version,
+                    host_support.host_api_version
+                )
+            }
+            Self::HostApiMismatch {
+                plugin,
+                host_support,
+            } => format!(
+                "Renderer '{}' {} requires host API {}, but this host provides {}. Rebuild the renderer against phidi-app {} or install a compatible renderer build.",
+                plugin.plugin_name,
+                plugin.plugin_version,
+                plugin.host_api_requirement,
+                host_support.host_api_version,
+                host_support.host_api_version
+            ),
+            Self::InvalidHostApiRequirement {
+                plugin,
+                host_support,
+                message,
+            } => format!(
+                "Renderer '{}' {} declared invalid host API requirement '{}': {message}. Fix the descriptor and rebuild against phidi-app {}.",
+                plugin.plugin_name,
+                plugin.plugin_version,
+                plugin.host_api_requirement,
+                host_support.host_api_version
+            ),
+            Self::InvalidHostApiVersion {
+                host_api_version,
+                message,
+            } => format!(
+                "Host renderer API version '{}' is invalid: {message}. Fix the host version string before probing renderers.",
+                host_api_version
+            ),
+        }
+    }
 }
 
 const fn size_of_descriptor() -> u32 {
@@ -169,8 +309,8 @@ mod tests {
 
     use super::{
         CURRENT_RENDERER_ABI_VERSION, RENDERER_ENTRY_SYMBOL_V1,
-        RendererAbiCompatibility, RendererAbiVersion, RendererLoadStatus,
-        RendererPluginDescriptorV1, RendererPluginMetadata,
+        RendererAbiCompatibility, RendererAbiVersion, RendererHostSupport,
+        RendererLoadStatus, RendererPluginDescriptorV1, RendererPluginMetadata,
     };
 
     #[test]
@@ -190,7 +330,7 @@ mod tests {
                 abi_version: RendererAbiVersion::new(2, 0),
                 host_api_requirement: ">=0.1.0, <0.2.0".to_string(),
             },
-            expected_abi_version: CURRENT_RENDERER_ABI_VERSION,
+            host_support: RendererHostSupport::current_build("0.1.3"),
             compatibility: RendererAbiCompatibility::TooNew,
         };
 
@@ -207,10 +347,64 @@ mod tests {
             })
         );
         assert_eq!(
-            value["expected_abi_version"],
-            json!({"major": 1, "minor": 0})
+            value["host_support"],
+            json!({
+                "current_abi_version": {"major": 1, "minor": 0},
+                "minimum_abi_version": {"major": 1, "minor": 0},
+                "host_api_version": "0.1.3"
+            })
         );
         assert_eq!(value["compatibility"], json!("too-new"));
+    }
+
+    #[test]
+    fn renderer_load_status_reports_actionable_abi_guidance() {
+        let status = RendererLoadStatus::AbiMismatch {
+            plugin: RendererPluginMetadata {
+                plugin_name: "throwaway".to_string(),
+                plugin_version: "0.1.0".to_string(),
+                abi_version: RendererAbiVersion::new(2, 0),
+                host_api_requirement: ">=0.1.0, <0.2.0".to_string(),
+            },
+            host_support: RendererHostSupport::current_build("0.1.3"),
+            compatibility: RendererAbiCompatibility::TooNew,
+        };
+
+        let guidance = status.actionable_message();
+
+        assert!(guidance.contains("throwaway"));
+        assert!(guidance.contains("ABI 2.0"));
+        assert!(guidance.contains("ABI 1.0"));
+        assert!(guidance.contains("host API 0.1.3"));
+        assert!(guidance.contains("Rebuild the renderer"));
+    }
+
+    #[test]
+    fn renderer_load_status_reports_actionable_host_api_guidance() {
+        let status = RendererLoadStatus::HostApiMismatch {
+            plugin: RendererPluginMetadata {
+                plugin_name: "throwaway".to_string(),
+                plugin_version: "0.1.0".to_string(),
+                abi_version: CURRENT_RENDERER_ABI_VERSION,
+                host_api_requirement: ">=0.2.0, <0.3.0".to_string(),
+            },
+            host_support: RendererHostSupport::current_build("0.1.3"),
+        };
+
+        let guidance = status.actionable_message();
+
+        assert!(guidance.contains("requires host API >=0.2.0, <0.3.0"));
+        assert!(guidance.contains("provides 0.1.3"));
+        assert!(guidance.contains("install a compatible renderer build"));
+    }
+
+    #[test]
+    fn renderer_host_support_tracks_current_build_window() {
+        let support = RendererHostSupport::current_build("0.1.3");
+
+        assert_eq!(support.current_abi_version, CURRENT_RENDERER_ABI_VERSION);
+        assert_eq!(support.minimum_abi_version, CURRENT_RENDERER_ABI_VERSION);
+        assert_eq!(support.host_api_version, "0.1.3");
     }
 
     #[test]

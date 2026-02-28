@@ -1,26 +1,39 @@
-use std::{ffi::CStr, path::Path};
+use std::{ffi::CStr, os::raw::c_char, path::Path};
 
 use libloading::Library;
 use phidi_rpc::renderer::{
     CURRENT_RENDERER_ABI_VERSION, RENDERER_ENTRY_SYMBOL_V1,
-    RendererAbiCompatibility, RendererLoadStatus, RendererPluginDescriptorV1,
-    RendererPluginEntryV1, RendererPluginMetadata,
+    RendererAbiCompatibility, RendererHostSupport, RendererLoadStatus,
+    RendererPluginDescriptorV1, RendererPluginEntryV1, RendererPluginMetadata,
 };
 use semver::{Version, VersionReq};
+
+pub const CURRENT_RENDERER_HOST_API_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const BUILTIN_RENDERER_NAME: &[u8] = b"phidi-default-renderer\0";
+const BUILTIN_RENDERER_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
+const BUILTIN_RENDERER_HOST_API_REQUIREMENT: &str =
+    concat!("=", env!("CARGO_PKG_VERSION"), "\0");
+
+static BUILTIN_DEFAULT_RENDERER_DESCRIPTOR: RendererPluginDescriptorV1 =
+    RendererPluginDescriptorV1 {
+        struct_size: RendererPluginDescriptorV1::expected_size(),
+        abi_version: CURRENT_RENDERER_ABI_VERSION,
+        plugin_name: BUILTIN_RENDERER_NAME.as_ptr() as *const c_char,
+        plugin_version: BUILTIN_RENDERER_VERSION.as_ptr() as *const c_char,
+        host_api_requirement: BUILTIN_RENDERER_HOST_API_REQUIREMENT.as_ptr()
+            as *const c_char,
+    };
 
 pub fn probe_renderer_plugin(
     plugin_library: &Path,
     host_api_version: &str,
 ) -> RendererLoadStatus {
-    let host_api_version = match Version::parse(host_api_version) {
-        Ok(version) => version,
-        Err(err) => {
-            return RendererLoadStatus::InvalidHostApiVersion {
-                host_api_version: host_api_version.to_string(),
-                message: err.to_string(),
-            };
-        }
-    };
+    let (host_support, parsed_host_api_version) =
+        match parse_host_support(host_api_version) {
+            Ok(host_support) => host_support,
+            Err(status) => return status,
+        };
 
     let library = match unsafe { Library::new(plugin_library) } {
         Ok(library) => library,
@@ -55,6 +68,57 @@ pub fn probe_renderer_plugin(
     }
 
     let descriptor = unsafe { &*descriptor };
+    validate_renderer_descriptor(descriptor, &host_support, &parsed_host_api_version)
+}
+
+pub fn probe_renderer_descriptor(
+    descriptor: &RendererPluginDescriptorV1,
+    host_api_version: &str,
+) -> RendererLoadStatus {
+    let (host_support, parsed_host_api_version) =
+        match parse_host_support(host_api_version) {
+            Ok(host_support) => host_support,
+            Err(status) => return status,
+        };
+
+    validate_renderer_descriptor(descriptor, &host_support, &parsed_host_api_version)
+}
+
+pub fn builtin_default_renderer_descriptor() -> &'static RendererPluginDescriptorV1 {
+    &BUILTIN_DEFAULT_RENDERER_DESCRIPTOR
+}
+
+pub fn probe_builtin_default_renderer() -> RendererLoadStatus {
+    probe_renderer_descriptor(
+        builtin_default_renderer_descriptor(),
+        CURRENT_RENDERER_HOST_API_VERSION,
+    )
+}
+
+fn parse_host_support(
+    host_api_version: &str,
+) -> Result<(RendererHostSupport, Version), RendererLoadStatus> {
+    let parsed_host_api_version = match Version::parse(host_api_version) {
+        Ok(version) => version,
+        Err(err) => {
+            return Err(RendererLoadStatus::InvalidHostApiVersion {
+                host_api_version: host_api_version.to_string(),
+                message: err.to_string(),
+            });
+        }
+    };
+
+    Ok((
+        RendererHostSupport::current_build(host_api_version),
+        parsed_host_api_version,
+    ))
+}
+
+fn validate_renderer_descriptor(
+    descriptor: &RendererPluginDescriptorV1,
+    host_support: &RendererHostSupport,
+    parsed_host_api_version: &Version,
+) -> RendererLoadStatus {
     if descriptor.struct_size != RendererPluginDescriptorV1::expected_size() {
         return RendererLoadStatus::InvalidDescriptor {
             message: format!(
@@ -79,7 +143,7 @@ pub fn probe_renderer_plugin(
     ) {
         return RendererLoadStatus::AbiMismatch {
             plugin,
-            expected_abi_version: CURRENT_RENDERER_ABI_VERSION,
+            host_support: host_support.clone(),
             compatibility,
         };
     }
@@ -89,15 +153,16 @@ pub fn probe_renderer_plugin(
         Err(err) => {
             return RendererLoadStatus::InvalidHostApiRequirement {
                 plugin,
+                host_support: host_support.clone(),
                 message: err.to_string(),
             };
         }
     };
 
-    if !requirement.matches(&host_api_version) {
+    if !requirement.matches(parsed_host_api_version) {
         return RendererLoadStatus::HostApiMismatch {
             plugin,
-            host_api_version: host_api_version.to_string(),
+            host_support: host_support.clone(),
         };
     }
 
@@ -143,7 +208,12 @@ mod tests {
     use super::probe_renderer_plugin;
     use phidi_rpc::renderer::{
         CURRENT_RENDERER_ABI_VERSION, RENDERER_ENTRY_SYMBOL_V1,
-        RendererAbiCompatibility, RendererLoadStatus,
+        RendererAbiCompatibility, RendererHostSupport, RendererLoadStatus,
+    };
+
+    use super::{
+        CURRENT_RENDERER_HOST_API_VERSION, builtin_default_renderer_descriptor,
+        probe_builtin_default_renderer, probe_renderer_descriptor,
     };
 
     fn ready_fixture() -> &'static PathBuf {
@@ -238,7 +308,7 @@ mod tests {
                     abi_version: phidi_rpc::renderer::RendererAbiVersion::new(2, 0,),
                     host_api_requirement: ">=0.1.0, <0.2.0".to_string(),
                 },
-                expected_abi_version: CURRENT_RENDERER_ABI_VERSION,
+                host_support: RendererHostSupport::current_build("0.1.3"),
                 compatibility: RendererAbiCompatibility::TooNew,
             }
         );
@@ -257,7 +327,7 @@ mod tests {
                     abi_version: CURRENT_RENDERER_ABI_VERSION,
                     host_api_requirement: ">=0.2.0, <0.3.0".to_string(),
                 },
-                host_api_version: "0.1.3".to_string(),
+                host_support: RendererHostSupport::current_build("0.1.3"),
             }
         );
     }
@@ -271,6 +341,48 @@ mod tests {
             RendererLoadStatus::MissingEntry {
                 symbol: RENDERER_ENTRY_SYMBOL_V1.to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn builtin_default_renderer_uses_same_descriptor_contract_path() {
+        let status = probe_builtin_default_renderer();
+
+        assert_eq!(
+            status,
+            RendererLoadStatus::Ready {
+                plugin: phidi_rpc::renderer::RendererPluginMetadata {
+                    plugin_name: "phidi-default-renderer".to_string(),
+                    plugin_version: CURRENT_RENDERER_HOST_API_VERSION.to_string(),
+                    abi_version: CURRENT_RENDERER_ABI_VERSION,
+                    host_api_requirement: format!(
+                        "={CURRENT_RENDERER_HOST_API_VERSION}"
+                    ),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn builtin_descriptor_reports_invalid_host_version_actionably() {
+        let status = probe_renderer_descriptor(
+            builtin_default_renderer_descriptor(),
+            "not-semver",
+        );
+
+        assert_eq!(
+            status,
+            RendererLoadStatus::InvalidHostApiVersion {
+                host_api_version: "not-semver".to_string(),
+                message:
+                    "unexpected character 'n' while parsing major version number"
+                        .to_string(),
+            }
+        );
+        assert!(
+            status
+                .actionable_message()
+                .contains("Fix the host version string")
         );
     }
 }

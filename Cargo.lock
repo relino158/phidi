@@ -3995,6 +3995,7 @@ dependencies = [
  "interprocess",
  "itertools 0.12.1",
  "lapce-xi-rope",
+ "libloading",
  "lsp-types",
  "notify",
  "nucleo",
