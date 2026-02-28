@@ -310,6 +310,7 @@ impl LspClient {
             plugin_rpc.core_rpc.clone(),
             server_rpc.clone(),
             plugin_rpc.clone(),
+            Vec::new(),
         );
 
         Ok(Self {

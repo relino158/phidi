@@ -73,6 +73,7 @@ impl ProxyHandler for Dispatcher {
                 disabled_volts,
                 extra_plugin_paths,
                 plugin_configurations,
+                volt_capability_grants,
                 window_id,
                 tab_id,
             } => {
@@ -98,6 +99,7 @@ impl ProxyHandler for Dispatcher {
                         disabled_volts,
                         extra_plugin_paths,
                         plugin_configurations,
+                        volt_capability_grants,
                         plugin_rpc.clone(),
                     );
                     plugin_rpc.mainloop(&mut plugin);
@@ -180,6 +182,13 @@ impl ProxyHandler for Dispatcher {
             }
             UpdatePluginConfigs { configs } => {
                 if let Err(err) = self.catalog_rpc.update_plugin_configs(configs) {
+                    tracing::error!("{:?}", err);
+                }
+            }
+            UpdateVoltCapabilityGrants { grants } => {
+                if let Err(err) =
+                    self.catalog_rpc.update_volt_capability_grants(grants)
+                {
                     tracing::error!("{:?}", err);
                 }
             }

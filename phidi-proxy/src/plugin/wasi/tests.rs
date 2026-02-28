@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 
-use phidi_rpc::plugin::VoltMetadata;
+use phidi_rpc::plugin::{VoltCapability, VoltMetadata};
 use serde_json::{Value, json};
 
 use super::{load_volt, unflatten_map};
+use crate::plugin::capabilities::{
+    requested_capability_prompt, sandbox_capabilities,
+};
 
 #[test]
 fn test_unflatten_map() {
@@ -141,6 +144,10 @@ fn test_load_volt() {
             icon: Some("icon.svg".to_string()),
             repository: Some("https://github.com/phidi".to_string()),
             wasm: wasm_path,
+            capabilities: Some(vec![
+                VoltCapability::Network,
+                VoltCapability::ProcessSpawn,
+            ]),
             color_themes: Some(color_themes_pathes),
             icon_themes: Some(icon_themes_pathes),
             dir: parent_path.canonicalize().ok(),
@@ -201,6 +208,7 @@ fn test_load_volt() {
             icon: Some("icon.svg".to_string()),
             repository: Some("https://github.com/phidi".to_string()),
             wasm: wasm_path,
+            capabilities: None,
             color_themes: Some(color_themes_pathes),
             icon_themes: Some(icon_themes_pathes),
             dir: parent_path.canonicalize().ok(),
@@ -227,6 +235,7 @@ fn test_load_volt() {
             icon: Some("icon.svg".to_string()),
             repository: Some("https://github.com/phidi".to_string()),
             wasm: None,
+            capabilities: None,
             color_themes: Some(Vec::new()),
             icon_themes: Some(Vec::new()),
             dir: parent_path.canonicalize().ok(),
@@ -234,4 +243,58 @@ fn test_load_volt() {
             config: None
         }
     );
+}
+
+#[test]
+fn sandbox_defaults_to_denied_for_ungranted_capabilities() {
+    let meta = VoltMetadata {
+        name: "sandboxed-plugin".to_string(),
+        version: "0.1.0".to_string(),
+        display_name: "Sandboxed Plugin".to_string(),
+        author: "someone".to_string(),
+        description: "needs extra powers".to_string(),
+        icon: None,
+        repository: None,
+        wasm: Some("/tmp/plugin.wasm".to_string()),
+        capabilities: Some(vec![
+            VoltCapability::Network,
+            VoltCapability::ProcessSpawn,
+        ]),
+        color_themes: None,
+        icon_themes: None,
+        dir: None,
+        activation: None,
+        config: None,
+    };
+
+    let denied = sandbox_capabilities(&meta, &[]);
+    assert_eq!(denied, Vec::<VoltCapability>::new());
+
+    let network_only = sandbox_capabilities(&meta, &[VoltCapability::Network]);
+    assert_eq!(network_only, vec![VoltCapability::Network]);
+}
+
+#[test]
+fn capability_prompts_are_explicit_and_revocable() {
+    let meta = VoltMetadata {
+        name: "sandboxed-plugin".to_string(),
+        version: "0.1.0".to_string(),
+        display_name: "Sandboxed Plugin".to_string(),
+        author: "someone".to_string(),
+        description: "needs extra powers".to_string(),
+        icon: None,
+        repository: None,
+        wasm: Some("/tmp/plugin.wasm".to_string()),
+        capabilities: Some(vec![VoltCapability::ProcessSpawn]),
+        color_themes: None,
+        icon_themes: None,
+        dir: None,
+        activation: None,
+        config: None,
+    };
+
+    let prompt = requested_capability_prompt(&meta, VoltCapability::ProcessSpawn);
+    assert!(prompt.contains("requests process spawn"));
+    assert!(prompt.contains("Allow Process Spawn"));
+    assert!(prompt.contains("revoke"));
 }

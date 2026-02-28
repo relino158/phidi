@@ -295,6 +295,8 @@ impl WindowTabData {
         let db: Arc<PhidiDb> = use_context().unwrap();
 
         let disabled_volts = db.get_disabled_volts().unwrap_or_default();
+        let volt_capability_grants =
+            db.get_volt_capability_grants().unwrap_or_default();
         let workspace_disabled_volts = db
             .get_workspace_disabled_volts(&workspace)
             .unwrap_or_default();
@@ -338,6 +340,7 @@ impl WindowTabData {
         let proxy = new_proxy(
             workspace.clone(),
             all_disabled_volts,
+            volt_capability_grants,
             window_common.extra_plugin_paths.as_ref().clone(),
             config.plugins.clone(),
             term_tx.clone(),

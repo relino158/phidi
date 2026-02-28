@@ -21,7 +21,7 @@ use parking_lot::Mutex;
 use phidi_xi_rope::RopeDelta;
 use serde::{Deserialize, Serialize};
 
-use super::plugin::VoltID;
+use super::plugin::{VoltCapability, VoltID};
 use crate::{
     RequestId, RpcError, RpcMessage,
     buffer::BufferId,
@@ -232,6 +232,7 @@ pub enum ProxyNotification {
         /// Paths to extra plugins that should be loaded
         extra_plugin_paths: Vec<PathBuf>,
         plugin_configurations: HashMap<String, HashMap<String, serde_json::Value>>,
+        volt_capability_grants: HashMap<VoltID, Vec<VoltCapability>>,
         window_id: usize,
         tab_id: usize,
     },
@@ -260,6 +261,9 @@ pub enum ProxyNotification {
     },
     UpdatePluginConfigs {
         configs: HashMap<String, HashMap<String, serde_json::Value>>,
+    },
+    UpdateVoltCapabilityGrants {
+        grants: HashMap<VoltID, Vec<VoltCapability>>,
     },
     NewTerminal {
         term_id: TermId,
@@ -642,6 +646,7 @@ impl ProxyRpcHandler {
         disabled_volts: Vec<VoltID>,
         extra_plugin_paths: Vec<PathBuf>,
         plugin_configurations: HashMap<String, HashMap<String, serde_json::Value>>,
+        volt_capability_grants: HashMap<VoltID, Vec<VoltCapability>>,
         window_id: usize,
         tab_id: usize,
     ) {
@@ -650,9 +655,17 @@ impl ProxyRpcHandler {
             disabled_volts,
             extra_plugin_paths,
             plugin_configurations,
+            volt_capability_grants,
             window_id,
             tab_id,
         });
+    }
+
+    pub fn update_volt_capability_grants(
+        &self,
+        grants: HashMap<VoltID, Vec<VoltCapability>>,
+    ) {
+        self.notification(ProxyNotification::UpdateVoltCapabilityGrants { grants });
     }
 
     pub fn completion(

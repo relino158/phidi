@@ -9,7 +9,7 @@ use floem::{ext_event::create_signal_from_channel, reactive::ReadSignal};
 use phidi_proxy::dispatch::Dispatcher;
 use phidi_rpc::{
     core::{CoreHandler, CoreNotification, CoreRpcHandler},
-    plugin::VoltID,
+    plugin::{VoltCapability, VoltID},
     proxy::{ProxyRpcHandler, ProxyStatus},
     terminal::TermId,
 };
@@ -48,6 +48,7 @@ impl ProxyData {
 pub fn new_proxy(
     workspace: Arc<PhidiWorkspace>,
     disabled_volts: Vec<VoltID>,
+    volt_capability_grants: HashMap<VoltID, Vec<VoltCapability>>,
     extra_plugin_paths: Vec<PathBuf>,
     plugin_configurations: HashMap<String, HashMap<String, serde_json::Value>>,
     term_tx: Sender<(TermId, TermEvent)>,
@@ -69,6 +70,7 @@ pub fn new_proxy(
                     disabled_volts,
                     extra_plugin_paths,
                     plugin_configurations,
+                    volt_capability_grants,
                     1,
                     1,
                 );

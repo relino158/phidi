@@ -49,6 +49,48 @@ pub struct VoltActivation {
     pub workspace_contains: Option<Vec<String>>,
 }
 
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum VoltCapability {
+    Network,
+    ProcessSpawn,
+}
+
+impl VoltCapability {
+    pub const ALL: [Self; 2] = [Self::Network, Self::ProcessSpawn];
+
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Network => "Network Access",
+            Self::ProcessSpawn => "Process Spawn",
+        }
+    }
+
+    pub const fn action_label(self, granted: bool) -> &'static str {
+        match (self, granted) {
+            (Self::Network, false) => "Allow Network Access",
+            (Self::Network, true) => "Revoke Network Access",
+            (Self::ProcessSpawn, false) => "Allow Process Spawn",
+            (Self::ProcessSpawn, true) => "Revoke Process Spawn",
+        }
+    }
+
+    pub const fn request_summary(self) -> &'static str {
+        match self {
+            Self::Network => "network access",
+            Self::ProcessSpawn => "process spawn",
+        }
+    }
+}
+
+impl fmt::Display for VoltCapability {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.title())
+    }
+}
+
 #[derive(Deserialize, Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct VoltConfig {
     pub default: Value,
@@ -66,6 +108,7 @@ pub struct VoltMetadata {
     pub icon: Option<String>,
     pub repository: Option<String>,
     pub wasm: Option<String>,
+    pub capabilities: Option<Vec<VoltCapability>>,
     pub color_themes: Option<Vec<String>>,
     pub icon_themes: Option<Vec<String>>,
     pub dir: Option<PathBuf>,
@@ -89,6 +132,12 @@ impl VoltMetadata {
             wasm: self.wasm.is_some(),
             updated_at_ts: 0,
         }
+    }
+
+    pub fn requests_capability(&self, capability: VoltCapability) -> bool {
+        self.capabilities
+            .as_ref()
+            .is_some_and(|caps| caps.contains(&capability))
     }
 }
 
@@ -142,7 +191,7 @@ impl From<&VoltInfo> for VoltID {
 
 #[cfg(test)]
 mod tests {
-    use super::{VoltID, VoltInfo, VoltMetadata};
+    use super::{VoltCapability, VoltID, VoltInfo, VoltMetadata};
 
     #[test]
     fn test_volt_metadata_id() {
@@ -155,6 +204,7 @@ mod tests {
             icon: None,
             repository: None,
             wasm: None,
+            capabilities: None,
             color_themes: None,
             icon_themes: None,
             dir: std::env::current_dir().unwrap().canonicalize().ok(),
@@ -193,6 +243,7 @@ mod tests {
             icon: None,
             repository: None,
             wasm: None,
+            capabilities: None,
             color_themes: None,
             icon_themes: None,
             dir: std::env::current_dir().unwrap().canonicalize().ok(),
@@ -233,5 +284,28 @@ mod tests {
         assert_eq!(<VoltID as From<VoltInfo>>::from(volt_info.clone()), volt_id);
         assert_eq!(<&VoltInfo as Into<VoltID>>::into(&volt_info), volt_id);
         assert_eq!(<VoltInfo as Into<VoltID>>::into(volt_info), volt_id);
+    }
+
+    #[test]
+    fn test_volt_metadata_requested_capabilities() {
+        let volt_metadata = VoltMetadata {
+            name: "plugin".to_string(),
+            version: "0.1".to_string(),
+            display_name: "Plugin".to_string(),
+            author: "Author".to_string(),
+            description: "Useful plugin".to_string(),
+            icon: None,
+            repository: None,
+            wasm: Some("/tmp/plugin.wasm".to_string()),
+            capabilities: Some(vec![VoltCapability::Network]),
+            color_themes: None,
+            icon_themes: None,
+            dir: None,
+            activation: None,
+            config: None,
+        };
+
+        assert!(volt_metadata.requests_capability(VoltCapability::Network));
+        assert!(!volt_metadata.requests_capability(VoltCapability::ProcessSpawn));
     }
 }

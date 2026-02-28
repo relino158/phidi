@@ -46,7 +46,7 @@ use phidi_core::{encoding::offset_utf16_to_utf8, rope_text_pos::RopeTextPosition
 use phidi_rpc::{
     RpcError,
     core::{CoreRpcHandler, ServerStatusParams},
-    plugin::{PluginId, VoltID},
+    plugin::{PluginId, VoltCapability, VoltID},
     style::{LineStyle, Style},
 };
 use phidi_xi_rope::{Rope, RopeDelta};
@@ -623,6 +623,7 @@ struct ServerRegistrations {
 pub struct PluginHostHandler {
     volt_id: VoltID,
     volt_display_name: String,
+    granted_capabilities: Vec<VoltCapability>,
     pwd: Option<PathBuf>,
     pub(crate) workspace: Option<PathBuf>,
     document_selector: Vec<DocumentFilter>,
@@ -648,6 +649,7 @@ impl PluginHostHandler {
         core_rpc: CoreRpcHandler,
         server_rpc: PluginServerRpcHandler,
         catalog_rpc: PluginCatalogRpcHandler,
+        granted_capabilities: Vec<VoltCapability>,
     ) -> Self {
         let document_selector = document_selector
             .iter()
@@ -658,6 +660,7 @@ impl PluginHostHandler {
             workspace,
             volt_id,
             volt_display_name,
+            granted_capabilities,
             document_selector,
             core_rpc,
             catalog_rpc,
@@ -968,6 +971,7 @@ impl PluginHostHandler {
                 resp.send_null();
             }
             ExecuteProcess::METHOD => {
+                self.ensure_capability(VoltCapability::ProcessSpawn)?;
                 let params: ExecuteProcessParams =
                     serde_json::from_value(serde_json::to_value(params)?)?;
                 let output = std::process::Command::new(params.program)
@@ -981,6 +985,7 @@ impl PluginHostHandler {
                 });
             }
             RegisterDebuggerType::METHOD => {
+                self.ensure_capability(VoltCapability::ProcessSpawn)?;
                 let params: RegisterDebuggerTypeParams =
                     serde_json::from_value(serde_json::to_value(params)?)?;
                 self.catalog_rpc.register_debugger_type(
@@ -991,6 +996,7 @@ impl PluginHostHandler {
                 resp.send_null();
             }
             StartLspServer::METHOD => {
+                self.ensure_capability(VoltCapability::ProcessSpawn)?;
                 let params: StartLspServerParams =
                     serde_json::from_value(serde_json::to_value(params)?)?;
                 let workspace = self.workspace.clone();
@@ -1096,6 +1102,7 @@ impl PluginHostHandler {
         match method.as_str() {
             // TODO: remove this after the next release and once we convert all the existing plugins to use the request.
             StartLspServer::METHOD => {
+                self.ensure_capability(VoltCapability::ProcessSpawn)?;
                 self.core_rpc.log(
                     phidi_rpc::core::LogLevel::Warn,
                     format!(
@@ -1326,6 +1333,27 @@ impl PluginHostHandler {
 
             resp.send(StartLspServerResult { id: plugin_id.0 });
         }
+    }
+
+    fn ensure_capability(&self, capability: VoltCapability) -> Result<()> {
+        if self.granted_capabilities.contains(&capability) {
+            return Ok(());
+        }
+
+        let message = format!(
+            "Plugin '{}' requested {}. Use '{}' from the plugin menu to grant it, then reload the plugin. You can revoke it later.",
+            self.volt_display_name,
+            capability.request_summary(),
+            capability.action_label(false),
+        );
+        self.core_rpc.show_message(
+            format!("Plugin Capability: {}", self.volt_display_name),
+            ShowMessageParams {
+                typ: MessageType::WARNING,
+                message: message.clone(),
+            },
+        );
+        Err(anyhow!(message))
     }
 }
 
