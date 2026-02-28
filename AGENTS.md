@@ -4,6 +4,11 @@
 
 You are working on the feature specified in `atlas-agent-artifacts/`. Refer to the top-level documents inside that folder for more information. You will be assigned one task from the `atlas-agent-artifacts/tasks/` directory. Tasks not assigned to you are explicitly out of scope.
 
+- At the start of your task, you MUST:
+1. start on git branch `experiments/atlas`
+2. ensure it's up to date with `origin/experiments/atlas`
+3. branch off to `experiments/atlas-{task_id}` (e.g., `experiments/atlas-a01`) and work there.
+
 ## Tools
 
 ### Context7
