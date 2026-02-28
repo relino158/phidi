@@ -1097,7 +1097,7 @@ fn rename_candidate_rank(
     )
 }
 
-fn sort_rename_edits(edits: &mut Vec<RenameEdit>) {
+fn sort_rename_edits(edits: &mut [RenameEdit]) {
     edits.sort_by(|left, right| {
         compare_locations(&left.location, &right.location)
             .then_with(|| left.replacement.cmp(&right.replacement))
@@ -1106,7 +1106,7 @@ fn sort_rename_edits(edits: &mut Vec<RenameEdit>) {
     });
 }
 
-fn sort_rename_conflicts(conflicts: &mut Vec<RenameConflict>) {
+fn sort_rename_conflicts(conflicts: &mut [RenameConflict]) {
     conflicts.sort_by(|left, right| {
         compare_optional_locations(left.location.as_ref(), right.location.as_ref())
             .then_with(|| left.message.cmp(&right.message))
@@ -1425,10 +1425,7 @@ fn usize_limit(limit: u32) -> usize {
 }
 
 fn depth_to_u32(depth: usize) -> u32 {
-    match u32::try_from(depth) {
-        Ok(depth) => depth,
-        Err(_) => u32::MAX,
-    }
+    u32::try_from(depth).unwrap_or(u32::MAX)
 }
 
 fn diff_lookup_paths(workspace_root: &Path, diff: &FileDiff) -> Vec<String> {
