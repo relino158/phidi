@@ -4094,6 +4094,7 @@ dependencies = [
  "phidi-core",
  "phidi-rpc",
  "polling",
+ "proc-macro2",
  "psp-types",
  "regex",
  "reqwest",

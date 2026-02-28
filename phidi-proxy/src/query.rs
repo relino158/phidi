@@ -1,5 +1,6 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fs,
     path::Path,
 };
 
@@ -15,13 +16,25 @@ use phidi_rpc::agent::{
     ConceptMatch, DeltaImpactScanRequest, DeltaImpactScanResult,
     EntityBriefingRequest, EntityBriefingResult, EntityLocation, EntitySelector,
     FileImpact, ImpactTarget, Provenance, ProvenanceSource, RelatedEntity,
-    RelationshipDirection, TextPoint, TextSpan, UnresolvedReference,
+    RelationshipDirection, RenameConflict, RenameEdit, RenamePlanningRequest,
+    RenamePlanningResult, TextPoint, TextSpan, UnresolvedReference,
 };
 use phidi_rpc::source_control::FileDiff;
+use syn::{Expr, visit::Visit};
 
 use crate::git_workspace::collect_working_tree_diffs;
 
 const CONCEPT_PREVIEW_RELATIONSHIP_LIMIT: usize = 2;
+const HIGH_CONFIDENCE_REASON: &str = "explicit path uniquely identifies the target";
+const LOW_CONFIDENCE_REASON: &str =
+    "locality breaks the tie, but the syntax has no explicit path";
+const FUNCTION_CONFLICT_REASON: &str =
+    "top-ranked candidates are tied on syntax-only evidence";
+const METHOD_CONFLICT_REASON: &str =
+    "method receiver types are unavailable in syntax-only ranking";
+const DEFINITION_EDIT_REASON: &str = "rename target definition";
+const HEURISTIC_FUNCTION_CONFIDENCE: u8 = 72;
+const HEURISTIC_METHOD_CONFIDENCE: u8 = 64;
 
 pub struct SnapshotQueryService<'a> {
     entities_by_id: BTreeMap<&'a str, &'a SemanticEntity>,
@@ -348,6 +361,187 @@ impl<'a> SnapshotQueryService<'a> {
         }
     }
 
+    pub fn rename_planning(
+        &self,
+        workspace_root: &Path,
+        request: RenamePlanningRequest,
+    ) -> CapabilityResponse<RenamePlanningResult> {
+        let Some(entity) = self.resolve_entity(&request.entity) else {
+            return CapabilityResponse::Error {
+                error: invalid_request_error(&request.entity),
+            };
+        };
+
+        if request.new_name.trim().is_empty() {
+            return CapabilityResponse::Error {
+                error: CapabilityError {
+                    code: CapabilityErrorCode::InvalidRequest,
+                    message: "rename target must not be empty".to_string(),
+                    retryable: false,
+                },
+            };
+        }
+
+        let mut high_confidence_edits = Vec::new();
+        let mut low_confidence_edits = Vec::new();
+        let mut conflicts = Vec::new();
+
+        match entity.location.as_ref() {
+            Some(location) => high_confidence_edits.push(RenameEdit {
+                location: map_location(location),
+                replacement: request.new_name.clone(),
+                reason: Some(DEFINITION_EDIT_REASON.to_string()),
+                certainty: phidi_rpc::agent::Certainty::observed(),
+                provenance: Provenance {
+                    source: ProvenanceSource::SyntaxTree,
+                    detail: Some("target entity declaration".to_string()),
+                },
+            }),
+            None => conflicts.push(RenameConflict {
+                location: None,
+                message: format!(
+                    "unable to preview the target definition for `{}` because the snapshot has no source location",
+                    entity.name
+                ),
+            }),
+        }
+
+        let Some(callable_kind) = rename_callable_kind(entity.kind) else {
+            sort_rename_edits(&mut high_confidence_edits);
+            sort_rename_edits(&mut low_confidence_edits);
+            sort_rename_conflicts(&mut conflicts);
+            return CapabilityResponse::Success {
+                result: RenamePlanningResult {
+                    high_confidence_edits,
+                    low_confidence_edits,
+                    conflicts,
+                },
+            };
+        };
+
+        let candidates = rename_candidates(
+            self.entities_by_id.values().copied(),
+            &entity.name,
+            callable_kind,
+        );
+        if !candidates
+            .iter()
+            .any(|candidate| candidate.entity.id == entity.id)
+        {
+            conflicts.push(RenameConflict {
+                location: entity.location.as_ref().map(map_location),
+                message: format!(
+                    "unable to rank rename candidates for `{}` in the current snapshot",
+                    entity.name
+                ),
+            });
+        }
+
+        for file_path in rename_source_files(self.entities_by_path.keys().copied()) {
+            let absolute_path = workspace_root.join(file_path.as_str());
+            let source = match fs::read_to_string(&absolute_path) {
+                Ok(source) => source,
+                Err(error) => {
+                    conflicts.push(RenameConflict {
+                        location: Some(EntityLocation {
+                            path: file_path.clone(),
+                            span: None,
+                        }),
+                        message: format!(
+                            "failed to read rename preview candidates from {}: {}",
+                            file_path, error
+                        ),
+                    });
+                    continue;
+                }
+            };
+            let syntax = match syn::parse_file(&source) {
+                Ok(syntax) => syntax,
+                Err(error) => {
+                    conflicts.push(RenameConflict {
+                        location: Some(EntityLocation {
+                            path: file_path.clone(),
+                            span: None,
+                        }),
+                        message: format!(
+                            "failed to parse rename preview candidates from {}: {}",
+                            file_path, error
+                        ),
+                    });
+                    continue;
+                }
+            };
+
+            for site in collect_rename_sites(file_path.as_str(), &syntax) {
+                if site.target_name != entity.name
+                    || site.callable_kind != callable_kind
+                {
+                    continue;
+                }
+
+                match classify_rename_site(&site, entity.id.0.as_str(), &candidates)
+                {
+                    RenameSiteDecision::Skip => {}
+                    RenameSiteDecision::HighConfidence { reason } => {
+                        high_confidence_edits.push(RenameEdit {
+                            location: site.location.clone(),
+                            replacement: request.new_name.clone(),
+                            reason: Some(reason.clone()),
+                            certainty: phidi_rpc::agent::Certainty::observed(),
+                            provenance: Provenance {
+                                source: ProvenanceSource::SyntaxTree,
+                                detail: Some(reason),
+                            },
+                        });
+                    }
+                    RenameSiteDecision::LowConfidence { reason } => {
+                        let confidence = match site.callable_kind {
+                            RenameCallableKind::Function => {
+                                HEURISTIC_FUNCTION_CONFIDENCE
+                            }
+                            RenameCallableKind::Method => {
+                                HEURISTIC_METHOD_CONFIDENCE
+                            }
+                        };
+                        low_confidence_edits.push(RenameEdit {
+                            location: site.location.clone(),
+                            replacement: request.new_name.clone(),
+                            reason: Some(reason.clone()),
+                            certainty: phidi_rpc::agent::Certainty::inferred(
+                                phidi_rpc::agent::ConfidenceScore::new(confidence)
+                                    .expect(
+                                        "rename preview confidence should be valid",
+                                    ),
+                            ),
+                            provenance: Provenance {
+                                source: ProvenanceSource::Heuristic,
+                                detail: Some(reason),
+                            },
+                        });
+                    }
+                    RenameSiteDecision::Conflict { message } => {
+                        conflicts.push(RenameConflict {
+                            location: Some(site.location.clone()),
+                            message,
+                        });
+                    }
+                }
+            }
+        }
+
+        sort_rename_edits(&mut high_confidence_edits);
+        sort_rename_edits(&mut low_confidence_edits);
+        sort_rename_conflicts(&mut conflicts);
+
+        CapabilityResponse::Success {
+            result: RenamePlanningResult {
+                high_confidence_edits,
+                low_confidence_edits,
+                conflicts,
+            },
+        }
+    }
+
     pub(crate) fn resolve_entity(
         &self,
         selector: &EntitySelector,
@@ -616,6 +810,403 @@ struct MatchScore {
 struct RankedConceptMatch {
     score: MatchScore,
     result: ConceptMatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RenameCallableKind {
+    Function,
+    Method,
+}
+
+#[derive(Clone, Debug)]
+struct RenameCandidate<'a> {
+    entity: &'a SemanticEntity,
+    qualified_name: Option<&'a str>,
+    file_path: &'a str,
+    module_path: Vec<String>,
+    callable_kind: RenameCallableKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RenameSite {
+    location: EntityLocation,
+    file_path: String,
+    target_name: String,
+    target_path: Option<String>,
+    callable_kind: RenameCallableKind,
+    caller_module_path: Vec<String>,
+}
+
+enum RenameSiteDecision {
+    Skip,
+    HighConfidence { reason: String },
+    LowConfidence { reason: String },
+    Conflict { message: String },
+}
+
+#[derive(Default)]
+struct RenameSiteCollector {
+    file_path: String,
+    caller_module_path: Vec<String>,
+    sites: Vec<RenameSite>,
+}
+
+impl<'ast> Visit<'ast> for RenameSiteCollector {
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let Expr::Path(path_expr) = node.func.as_ref() {
+            if let Some(segment) = path_expr.path.segments.last() {
+                self.sites.push(RenameSite {
+                    location: span_location(&self.file_path, segment.ident.span()),
+                    file_path: self.file_path.clone(),
+                    target_name: segment.ident.to_string(),
+                    target_path: (path_expr.path.segments.len() > 1)
+                        .then(|| syn_path_label(&path_expr.path)),
+                    callable_kind: RenameCallableKind::Function,
+                    caller_module_path: self.caller_module_path.clone(),
+                });
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        self.sites.push(RenameSite {
+            location: span_location(&self.file_path, node.method.span()),
+            file_path: self.file_path.clone(),
+            target_name: node.method.to_string(),
+            target_path: None,
+            callable_kind: RenameCallableKind::Method,
+            caller_module_path: self.caller_module_path.clone(),
+        });
+        syn::visit::visit_expr_method_call(self, node);
+    }
+}
+
+fn rename_callable_kind(kind: EntityKind) -> Option<RenameCallableKind> {
+    match kind {
+        EntityKind::Function | EntityKind::Test => {
+            Some(RenameCallableKind::Function)
+        }
+        EntityKind::Method => Some(RenameCallableKind::Method),
+        _ => None,
+    }
+}
+
+fn rename_candidates<'a>(
+    entities: impl Iterator<Item = &'a SemanticEntity>,
+    target_name: &str,
+    callable_kind: RenameCallableKind,
+) -> Vec<RenameCandidate<'a>> {
+    entities
+        .filter_map(|entity| {
+            if entity.name != target_name {
+                return None;
+            }
+            let entity_callable_kind = rename_callable_kind(entity.kind)?;
+            if entity_callable_kind != callable_kind {
+                return None;
+            }
+            let file_path = entity
+                .location
+                .as_ref()
+                .map(|location| location.path.as_str())
+                .unwrap_or_default();
+            let module_path = entity
+                .qualified_name
+                .as_deref()
+                .map(qualified_module_path)
+                .unwrap_or_else(|| module_path_for_file(file_path));
+            Some(RenameCandidate {
+                entity,
+                qualified_name: entity.qualified_name.as_deref(),
+                file_path,
+                module_path,
+                callable_kind: entity_callable_kind,
+            })
+        })
+        .collect()
+}
+
+fn rename_source_files<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<String> {
+    paths
+        .filter(|path| path.ends_with(".rs"))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn collect_rename_sites(file_path: &str, syntax: &syn::File) -> Vec<RenameSite> {
+    let mut collector = RenameSiteCollector {
+        file_path: file_path.to_string(),
+        caller_module_path: module_path_for_file(file_path),
+        sites: Vec::new(),
+    };
+    collector.visit_file(syntax);
+    collector.sites
+}
+
+fn classify_rename_site(
+    site: &RenameSite,
+    target_entity_id: &str,
+    candidates: &[RenameCandidate<'_>],
+) -> RenameSiteDecision {
+    let matching_candidates = candidates
+        .iter()
+        .filter(|candidate| candidate.callable_kind == site.callable_kind)
+        .collect::<Vec<_>>();
+    if matching_candidates.is_empty() {
+        return RenameSiteDecision::Skip;
+    }
+
+    match site.callable_kind {
+        RenameCallableKind::Function => {
+            if let Some(target_path) = site.target_path.as_deref() {
+                let exact_matches = matching_candidates
+                    .iter()
+                    .copied()
+                    .filter(|candidate| {
+                        candidate.qualified_name.is_some_and(|qualified_name| {
+                            qualified_name == target_path
+                                || qualified_name
+                                    .ends_with(&format!("::{target_path}"))
+                                || qualified_name.ends_with(target_path)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                return classify_exact_path_match(
+                    target_entity_id,
+                    &exact_matches,
+                    HIGH_CONFIDENCE_REASON,
+                    FUNCTION_CONFLICT_REASON,
+                );
+            }
+
+            classify_heuristic_function_site(
+                site,
+                target_entity_id,
+                &matching_candidates,
+            )
+        }
+        RenameCallableKind::Method => {
+            if matching_candidates.len() == 1
+                && matching_candidates[0].entity.id.0 == target_entity_id
+            {
+                return RenameSiteDecision::LowConfidence {
+                    reason: LOW_CONFIDENCE_REASON.to_string(),
+                };
+            }
+            if matching_candidates
+                .iter()
+                .any(|candidate| candidate.entity.id.0 == target_entity_id)
+            {
+                return RenameSiteDecision::Conflict {
+                    message: METHOD_CONFLICT_REASON.to_string(),
+                };
+            }
+            RenameSiteDecision::Skip
+        }
+    }
+}
+
+fn classify_exact_path_match(
+    target_entity_id: &str,
+    exact_matches: &[&RenameCandidate<'_>],
+    high_confidence_reason: &str,
+    conflict_reason: &str,
+) -> RenameSiteDecision {
+    if exact_matches.is_empty() {
+        return RenameSiteDecision::Skip;
+    }
+
+    if exact_matches.len() == 1 {
+        return if exact_matches[0].entity.id.0 == target_entity_id {
+            RenameSiteDecision::HighConfidence {
+                reason: high_confidence_reason.to_string(),
+            }
+        } else {
+            RenameSiteDecision::Skip
+        };
+    }
+
+    if exact_matches
+        .iter()
+        .any(|candidate| candidate.entity.id.0 == target_entity_id)
+    {
+        RenameSiteDecision::Conflict {
+            message: conflict_reason.to_string(),
+        }
+    } else {
+        RenameSiteDecision::Skip
+    }
+}
+
+fn classify_heuristic_function_site(
+    site: &RenameSite,
+    target_entity_id: &str,
+    candidates: &[&RenameCandidate<'_>],
+) -> RenameSiteDecision {
+    let mut ranked_candidates = candidates
+        .iter()
+        .copied()
+        .map(|candidate| (rename_candidate_rank(site, candidate), candidate))
+        .collect::<Vec<_>>();
+    ranked_candidates.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.file_path.cmp(right.1.file_path))
+            .then_with(|| left.1.qualified_name.cmp(&right.1.qualified_name))
+            .then_with(|| left.1.entity.id.0.cmp(&right.1.entity.id.0))
+    });
+
+    let Some((best_rank, _)) = ranked_candidates.first() else {
+        return RenameSiteDecision::Skip;
+    };
+    let top_candidates = ranked_candidates
+        .iter()
+        .filter(|(rank, _)| rank == best_rank)
+        .map(|(_, candidate)| *candidate)
+        .collect::<Vec<_>>();
+
+    if !top_candidates
+        .iter()
+        .any(|candidate| candidate.entity.id.0 == target_entity_id)
+    {
+        return RenameSiteDecision::Skip;
+    }
+
+    if top_candidates.len() == 1 {
+        RenameSiteDecision::LowConfidence {
+            reason: LOW_CONFIDENCE_REASON.to_string(),
+        }
+    } else {
+        RenameSiteDecision::Conflict {
+            message: FUNCTION_CONFLICT_REASON.to_string(),
+        }
+    }
+}
+
+fn rename_candidate_rank(
+    site: &RenameSite,
+    candidate: &RenameCandidate<'_>,
+) -> (bool, usize) {
+    (
+        candidate.file_path == site.file_path,
+        shared_prefix_depth(&site.caller_module_path, &candidate.module_path),
+    )
+}
+
+fn sort_rename_edits(edits: &mut Vec<RenameEdit>) {
+    edits.sort_by(|left, right| {
+        compare_locations(&left.location, &right.location)
+            .then_with(|| left.replacement.cmp(&right.replacement))
+            .then_with(|| left.reason.cmp(&right.reason))
+            .then_with(|| left.provenance.detail.cmp(&right.provenance.detail))
+    });
+}
+
+fn sort_rename_conflicts(conflicts: &mut Vec<RenameConflict>) {
+    conflicts.sort_by(|left, right| {
+        compare_optional_locations(left.location.as_ref(), right.location.as_ref())
+            .then_with(|| left.message.cmp(&right.message))
+    });
+}
+
+fn compare_locations(
+    left: &EntityLocation,
+    right: &EntityLocation,
+) -> std::cmp::Ordering {
+    left.path
+        .cmp(&right.path)
+        .then_with(|| left.span.cmp(&right.span))
+}
+
+fn compare_optional_locations(
+    left: Option<&EntityLocation>,
+    right: Option<&EntityLocation>,
+) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => compare_locations(left, right),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn module_path_for_file(relative_path: &str) -> Vec<String> {
+    let path = Path::new(relative_path);
+    let mut segments: Vec<String> = path
+        .iter()
+        .filter_map(|segment| segment.to_str().map(str::to_string))
+        .collect();
+
+    if matches!(
+        segments.first().map(String::as_str),
+        Some("src" | "tests" | "examples")
+    ) {
+        segments.remove(0);
+    }
+
+    let Some(last_segment) = segments.pop() else {
+        return Vec::new();
+    };
+    let stem = Path::new(&last_segment)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_string();
+    if !matches!(stem.as_str(), "lib" | "main" | "mod") {
+        segments.push(stem);
+    }
+
+    segments
+}
+
+fn qualified_module_path(qualified_name: &str) -> Vec<String> {
+    let mut segments = qualified_name
+        .split("::")
+        .filter(|segment| !segment.is_empty())
+        .filter(|segment| !matches!(*segment, "crate" | "self" | "super"))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if !segments.is_empty() {
+        segments.pop();
+    }
+    segments
+}
+
+fn shared_prefix_depth(left: &[String], right: &[String]) -> usize {
+    left.iter()
+        .zip(right.iter())
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
+fn syn_path_label(path: &syn::Path) -> String {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+fn span_location(path: &str, span: proc_macro2::Span) -> EntityLocation {
+    let start = span.start();
+    let end = span.end();
+    EntityLocation {
+        path: path.to_string(),
+        span: Some(TextSpan {
+            start: TextPoint {
+                line: start.line.saturating_sub(1) as u32,
+                column: start.column as u32,
+            },
+            end: TextPoint {
+                line: end.line.saturating_sub(1) as u32,
+                column: end.column as u32,
+            },
+        }),
+    }
 }
 
 fn compare_entities(
