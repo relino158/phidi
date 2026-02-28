@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Current objective
+
+You are working on the feature specified in `atlas-agent-artifacts/`. Refer to the top-level documents inside that folder for more information. You will be assigned one task from the `atlas-agent-artifacts/tasks/` directory. Tasks not assigned to you are explicitly out of scope.
+
 ## Tools
 
 ### Context7
