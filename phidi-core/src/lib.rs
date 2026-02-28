@@ -6,6 +6,7 @@ pub mod language;
 pub mod lens;
 pub mod meta;
 pub mod rope_text_pos;
+pub mod semantic_map;
 pub mod style;
 pub mod syntax;
 // This is primarily being re-exported to avoid changing every single usage

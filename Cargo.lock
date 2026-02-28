@@ -4053,6 +4053,8 @@ dependencies = [
  "phidi-rpc",
  "regex",
  "remain",
+ "serde",
+ "serde_json",
  "slotmap",
  "strum 0.27.2",
  "strum_macros 0.27.2",
