@@ -4,28 +4,29 @@ pub mod buffer;
 pub mod cli;
 pub mod dispatch;
 pub mod plugin;
+pub mod query;
 pub mod rust_snapshot;
 pub mod snapshot;
 pub mod terminal;
 pub mod watcher;
 
 use std::{
-    io::{BufReader, stdin, stdout},
+    io::{stdin, stdout, BufReader},
     process::exit,
     sync::Arc,
     thread,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use dispatch::Dispatcher;
 use phidi_core::{directory::Directory, meta};
 use phidi_rpc::{
-    RpcMessage,
     core::{CoreRpc, CoreRpcHandler},
     file::PathObject,
     proxy::{ProxyMessage, ProxyNotification, ProxyRpcHandler},
     stdio::stdio_transport,
+    RpcMessage,
 };
 use tracing::error;
 
