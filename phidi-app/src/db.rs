@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -8,7 +9,8 @@ use anyhow::{Result, anyhow};
 use crossbeam_channel::{Sender, unbounded};
 use floem::{peniko::kurbo::Vec2, reactive::SignalGet};
 use phidi_core::directory::Directory;
-use phidi_rpc::plugin::VoltID;
+use phidi_rpc::plugin::{VoltCapability, VoltID};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -26,6 +28,7 @@ const WORKSPACE_INFO: &str = "workspace_info";
 const WORKSPACE_FILES: &str = "workspace_files";
 const PANEL_ORDERS: &str = "panel_orders";
 const DISABLED_VOLTS: &str = "disabled_volts";
+const VOLT_CAPABILITY_GRANTS: &str = "volt_capability_grants";
 const RECENT_WORKSPACES: &str = "recent_workspaces";
 
 pub enum SaveEvent {
@@ -34,8 +37,15 @@ pub enum SaveEvent {
     RecentWorkspace(PhidiWorkspace),
     Doc(DocInfo),
     DisabledVolts(Vec<VoltID>),
+    VoltCapabilityGrants(HashMap<VoltID, Vec<VoltCapability>>),
     WorkspaceDisabledVolts(Arc<PhidiWorkspace>, Vec<VoltID>),
     PanelOrder(PanelOrder),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct VoltCapabilityGrantRecord {
+    volt_id: VoltID,
+    capabilities: Vec<VoltCapability>,
 }
 
 #[derive(Clone)]
@@ -95,6 +105,13 @@ impl PhidiDb {
                         }
                         SaveEvent::DisabledVolts(volts) => {
                             if let Err(err) = local_db.insert_disabled_volts(volts) {
+                                tracing::error!("{:?}", err);
+                            }
+                        }
+                        SaveEvent::VoltCapabilityGrants(grants) => {
+                            if let Err(err) =
+                                local_db.insert_volt_capability_grants(grants)
+                            {
                                 tracing::error!("{:?}", err);
                             }
                         }
@@ -173,6 +190,44 @@ impl PhidiDb {
         let volts = std::fs::read_to_string(folder.join(DISABLED_VOLTS))?;
         let volts: Vec<VoltID> = serde_json::from_str(&volts)?;
         Ok(volts)
+    }
+
+    pub fn get_volt_capability_grants(
+        &self,
+    ) -> Result<HashMap<VoltID, Vec<VoltCapability>>> {
+        let grants =
+            std::fs::read_to_string(self.folder.join(VOLT_CAPABILITY_GRANTS))?;
+        let grants: Vec<VoltCapabilityGrantRecord> = serde_json::from_str(&grants)?;
+        Ok(grants
+            .into_iter()
+            .map(|record| (record.volt_id, record.capabilities))
+            .collect())
+    }
+
+    pub fn save_volt_capability_grants(
+        &self,
+        grants: HashMap<VoltID, Vec<VoltCapability>>,
+    ) {
+        if let Err(err) = self.save_tx.send(SaveEvent::VoltCapabilityGrants(grants))
+        {
+            tracing::error!("{:?}", err);
+        }
+    }
+
+    pub fn insert_volt_capability_grants(
+        &self,
+        grants: HashMap<VoltID, Vec<VoltCapability>>,
+    ) -> Result<()> {
+        let grants = grants
+            .into_iter()
+            .map(|(volt_id, capabilities)| VoltCapabilityGrantRecord {
+                volt_id,
+                capabilities,
+            })
+            .collect::<Vec<_>>();
+        let grants = serde_json::to_string_pretty(&grants)?;
+        std::fs::write(self.folder.join(VOLT_CAPABILITY_GRANTS), grants)?;
+        Ok(())
     }
 
     pub fn recent_workspaces(&self) -> Result<Vec<PhidiWorkspace>> {
@@ -449,4 +504,42 @@ fn doc_path_name(path: &Path) -> String {
     let mut hasher = Sha256::new();
     hasher.update(path.to_string_lossy().as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crossbeam_channel::unbounded;
+    use phidi_rpc::plugin::{VoltCapability, VoltID};
+    use tempfile::tempdir;
+
+    use super::PhidiDb;
+
+    #[test]
+    fn volt_capability_grants_round_trip() {
+        let temp = tempdir().unwrap();
+        let folder = temp.path().join("db");
+        let workspace_folder = folder.join("workspaces");
+        std::fs::create_dir_all(&workspace_folder).unwrap();
+        let (save_tx, _save_rx) = unbounded();
+        let db = PhidiDb {
+            folder,
+            workspace_folder,
+            save_tx,
+        };
+
+        let mut grants = HashMap::new();
+        grants.insert(
+            VoltID {
+                author: "someone".to_string(),
+                name: "sandboxed".to_string(),
+            },
+            vec![VoltCapability::Network, VoltCapability::ProcessSpawn],
+        );
+
+        db.insert_volt_capability_grants(grants.clone()).unwrap();
+
+        assert_eq!(db.get_volt_capability_grants().unwrap(), grants);
+    }
 }

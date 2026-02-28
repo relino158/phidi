@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     rc::Rc,
     sync::{Arc, atomic::AtomicU64},
 };
@@ -28,7 +28,7 @@ use phidi_core::{command::EditCommand, directory::Directory, mode::Mode};
 use phidi_proxy::plugin::{download_volt, volt_icon, wasi::find_all_volts};
 use phidi_rpc::{
     core::{CoreNotification, CoreRpcHandler},
-    plugin::{VoltID, VoltInfo, VoltMetadata},
+    plugin::{VoltCapability, VoltID, VoltInfo, VoltMetadata},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -104,6 +104,7 @@ pub struct PluginData {
     pub installed: RwSignal<IndexMap<VoltID, InstalledVoltData>>,
     pub available: AvailableVoltList,
     pub all: RwSignal<im::HashMap<VoltID, AvailableVoltData>>,
+    pub capability_grants: RwSignal<HashMap<VoltID, Vec<VoltCapability>>>,
     pub disabled: RwSignal<HashSet<VoltID>>,
     pub workspace_disabled: RwSignal<HashSet<VoltID>>,
     pub common: Rc<CommonData>,
@@ -173,11 +174,15 @@ impl PluginData {
         };
         let disabled = cx.create_rw_signal(disabled);
         let workspace_disabled = cx.create_rw_signal(workspace_disabled);
+        let db: Arc<PhidiDb> = use_context().unwrap();
+        let capability_grants =
+            cx.create_rw_signal(db.get_volt_capability_grants().unwrap_or_default());
 
         let plugin = Self {
             installed,
             available,
             all: cx.create_rw_signal(im::HashMap::new()),
+            capability_grants,
             disabled,
             workspace_disabled,
             common,
@@ -607,6 +612,58 @@ impl PluginData {
         self.common.proxy.reload_volt(volt);
     }
 
+    fn capability_granted(
+        &self,
+        volt_id: &VoltID,
+        capability: VoltCapability,
+    ) -> bool {
+        self.capability_grants.with_untracked(
+            |grants: &HashMap<VoltID, Vec<VoltCapability>>| {
+                grants
+                    .get(volt_id)
+                    .is_some_and(|caps| caps.contains(&capability))
+            },
+        )
+    }
+
+    fn set_volt_capability(
+        &self,
+        meta: &VoltMetadata,
+        capability: VoltCapability,
+        granted: bool,
+    ) {
+        self.capability_grants.update(
+            |grants: &mut HashMap<VoltID, Vec<VoltCapability>>| {
+                let volt_id = meta.id();
+                let mut remove_entry = false;
+                let caps = grants.entry(volt_id.clone()).or_default();
+                if granted {
+                    if !caps.contains(&capability) {
+                        caps.push(capability);
+                        caps.sort();
+                        caps.dedup();
+                    }
+                } else {
+                    caps.retain(|item| item != &capability);
+                    if caps.is_empty() {
+                        remove_entry = true;
+                    }
+                }
+                if remove_entry {
+                    grants.remove(&volt_id);
+                }
+            },
+        );
+
+        let grants = self.capability_grants.get_untracked();
+        let db: Arc<PhidiDb> = use_context().unwrap();
+        db.save_volt_capability_grants(grants.clone());
+        self.common.proxy.update_volt_capability_grants(grants);
+        if meta.wasm.is_some() {
+            self.common.proxy.reload_volt(meta.clone());
+        }
+    }
+
     pub fn plugin_controls(&self, meta: VoltMetadata, latest: VoltInfo) -> Menu {
         let volt_id = meta.id();
         let mut menu = Menu::new("");
@@ -629,71 +686,96 @@ impl PluginData {
                     plugin.reload_volt(meta.clone());
                 }
             }))
-            .separator()
-            .entry(
-                MenuItem::new("Enable")
-                    .enabled(
-                        self.disabled
-                            .with_untracked(|disabled| disabled.contains(&volt_id)),
-                    )
-                    .action({
+            .separator();
+        for capability in VoltCapability::ALL {
+            if meta.requests_capability(capability) {
+                let granted = self.capability_granted(&volt_id, capability);
+                menu = menu.entry(
+                    MenuItem::new(capability.action_label(granted)).action({
                         let plugin = self.clone();
-                        let volt = meta.info();
+                        let meta = meta.clone();
                         move || {
-                            plugin.enable_volt(volt.clone());
+                            let granted_now =
+                                plugin.capability_granted(&meta.id(), capability);
+                            plugin.set_volt_capability(
+                                &meta,
+                                capability,
+                                !granted_now,
+                            );
                         }
                     }),
-            )
-            .entry(
-                MenuItem::new("Disable")
-                    .enabled(
-                        self.disabled
-                            .with_untracked(|disabled| !disabled.contains(&volt_id)),
-                    )
-                    .action({
-                        let plugin = self.clone();
-                        let volt = meta.info();
-                        move || {
-                            plugin.disable_volt(volt.clone());
-                        }
-                    }),
-            )
-            .separator()
-            .entry(
-                MenuItem::new("Enable For Workspace")
-                    .enabled(
-                        self.workspace_disabled
-                            .with_untracked(|disabled| disabled.contains(&volt_id)),
-                    )
-                    .action({
-                        let plugin = self.clone();
-                        let volt = meta.info();
-                        move || {
-                            plugin.enable_volt_for_ws(volt.clone());
-                        }
-                    }),
-            )
-            .entry(
-                MenuItem::new("Disable For Workspace")
-                    .enabled(
-                        self.workspace_disabled
-                            .with_untracked(|disabled| !disabled.contains(&volt_id)),
-                    )
-                    .action({
-                        let plugin = self.clone();
-                        let volt = meta.info();
-                        move || {
-                            plugin.disable_volt_for_ws(volt.clone());
-                        }
-                    }),
-            )
-            .separator()
-            .entry(MenuItem::new("Uninstall").action({
-                let plugin = self.clone();
-                move || {
-                    plugin.uninstall_volt(meta.clone());
-                }
-            }));
+                );
+            }
+        }
+        if meta
+            .capabilities
+            .as_ref()
+            .is_some_and(|caps| !caps.is_empty())
+        {
+            menu = menu.separator();
+        }
+        menu = menu.entry(
+            MenuItem::new("Enable")
+                .enabled(
+                    self.disabled
+                        .with_untracked(|disabled| disabled.contains(&volt_id)),
+                )
+                .action({
+                    let plugin = self.clone();
+                    let volt = meta.info();
+                    move || {
+                        plugin.enable_volt(volt.clone());
+                    }
+                }),
+        );
+        menu = menu.entry(
+            MenuItem::new("Disable")
+                .enabled(
+                    self.disabled
+                        .with_untracked(|disabled| !disabled.contains(&volt_id)),
+                )
+                .action({
+                    let plugin = self.clone();
+                    let volt = meta.info();
+                    move || {
+                        plugin.disable_volt(volt.clone());
+                    }
+                }),
+        );
+        menu = menu.separator().entry(
+            MenuItem::new("Enable For Workspace")
+                .enabled(
+                    self.workspace_disabled
+                        .with_untracked(|disabled| disabled.contains(&volt_id)),
+                )
+                .action({
+                    let plugin = self.clone();
+                    let volt = meta.info();
+                    move || {
+                        plugin.enable_volt_for_ws(volt.clone());
+                    }
+                }),
+        );
+        menu = menu.entry(
+            MenuItem::new("Disable For Workspace")
+                .enabled(
+                    self.workspace_disabled
+                        .with_untracked(|disabled| !disabled.contains(&volt_id)),
+                )
+                .action({
+                    let plugin = self.clone();
+                    let volt = meta.info();
+                    move || {
+                        plugin.disable_volt_for_ws(volt.clone());
+                    }
+                }),
+        );
+        menu = menu.separator().entry(MenuItem::new("Uninstall").action({
+            let plugin = self.clone();
+            move || {
+                plugin.uninstall_volt(meta.clone());
+            }
+        }));
         menu
     }
 }

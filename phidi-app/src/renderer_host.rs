@@ -1,4 +1,8 @@
-use std::{ffi::CStr, os::raw::c_char, path::Path};
+use std::{
+    ffi::CStr,
+    os::raw::c_char,
+    path::{Path, PathBuf},
+};
 
 use libloading::Library;
 use phidi_rpc::renderer::{
@@ -25,50 +29,111 @@ static BUILTIN_DEFAULT_RENDERER_DESCRIPTOR: RendererPluginDescriptorV1 =
             as *const c_char,
     };
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RendererSource {
+    BuiltinDefault,
+    DynamicLibrary(PathBuf),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RendererRuntimeState {
+    source: Option<RendererSource>,
+    plugin: Option<RendererPluginMetadata>,
+    last_status: Option<RendererLoadStatus>,
+}
+
+impl RendererRuntimeState {
+    pub fn is_stopped(&self) -> bool {
+        self.source.is_none() && self.plugin.is_none() && self.last_status.is_none()
+    }
+
+    pub fn plugin(&self) -> Option<&RendererPluginMetadata> {
+        self.plugin.as_ref()
+    }
+
+    pub fn last_status(&self) -> Option<&RendererLoadStatus> {
+        self.last_status.as_ref()
+    }
+}
+
+#[derive(Default)]
+struct ActiveRenderer {
+    plugin: Option<RendererPluginMetadata>,
+    _library: Option<Library>,
+}
+
+pub struct RendererHost {
+    host_api_version: String,
+    active: ActiveRenderer,
+    last_source: Option<RendererSource>,
+    state: RendererRuntimeState,
+}
+
+impl RendererHost {
+    pub fn new(host_api_version: impl Into<String>) -> Self {
+        Self {
+            host_api_version: host_api_version.into(),
+            active: ActiveRenderer::default(),
+            last_source: None,
+            state: RendererRuntimeState {
+                source: None,
+                plugin: None,
+                last_status: None,
+            },
+        }
+    }
+
+    pub fn start(&mut self, source: RendererSource) -> &RendererRuntimeState {
+        self.stop();
+        self.last_source = Some(source.clone());
+
+        match load_renderer(&source, &self.host_api_version) {
+            Ok(active) => {
+                self.state = RendererRuntimeState {
+                    source: Some(source),
+                    plugin: active.plugin.clone(),
+                    last_status: None,
+                };
+                self.active = active;
+            }
+            Err(status) => {
+                self.state = RendererRuntimeState {
+                    source: Some(source),
+                    plugin: None,
+                    last_status: Some(status),
+                };
+            }
+        }
+
+        &self.state
+    }
+
+    pub fn stop(&mut self) -> &RendererRuntimeState {
+        self.active = ActiveRenderer::default();
+        self.state = RendererRuntimeState {
+            source: None,
+            plugin: None,
+            last_status: None,
+        };
+        &self.state
+    }
+
+    pub fn reload(&mut self) -> Option<&RendererRuntimeState> {
+        let source = self.last_source.clone()?;
+        Some(self.start(source))
+    }
+}
+
 pub fn probe_renderer_plugin(
     plugin_library: &Path,
     host_api_version: &str,
 ) -> RendererLoadStatus {
-    let (host_support, parsed_host_api_version) =
-        match parse_host_support(host_api_version) {
-            Ok(host_support) => host_support,
-            Err(status) => return status,
-        };
-
-    let library = match unsafe { Library::new(plugin_library) } {
-        Ok(library) => library,
-        Err(err) => {
-            return RendererLoadStatus::LoadFailure {
-                message: format!(
-                    "failed to load '{}': {err}",
-                    plugin_library.display()
-                ),
-            };
-        }
-    };
-
-    let entry = unsafe {
-        match library
-            .get::<RendererPluginEntryV1>(RENDERER_ENTRY_SYMBOL_V1.as_bytes())
-        {
-            Ok(symbol) => symbol,
-            Err(_) => {
-                return RendererLoadStatus::MissingEntry {
-                    symbol: RENDERER_ENTRY_SYMBOL_V1.to_string(),
-                };
-            }
-        }
-    };
-
-    let descriptor = unsafe { entry() };
-    if descriptor.is_null() {
-        return RendererLoadStatus::NullDescriptor {
-            symbol: RENDERER_ENTRY_SYMBOL_V1.to_string(),
-        };
+    match load_dynamic_renderer(plugin_library, host_api_version) {
+        Ok(active) => RendererLoadStatus::Ready {
+            plugin: active.plugin.expect("dynamic renderer loads metadata"),
+        },
+        Err(status) => status,
     }
-
-    let descriptor = unsafe { &*descriptor };
-    validate_renderer_descriptor(descriptor, &host_support, &parsed_host_api_version)
 }
 
 pub fn probe_renderer_descriptor(
@@ -89,10 +154,95 @@ pub fn builtin_default_renderer_descriptor() -> &'static RendererPluginDescripto
 }
 
 pub fn probe_builtin_default_renderer() -> RendererLoadStatus {
-    probe_renderer_descriptor(
-        builtin_default_renderer_descriptor(),
+    match load_renderer(
+        &RendererSource::BuiltinDefault,
         CURRENT_RENDERER_HOST_API_VERSION,
-    )
+    ) {
+        Ok(active) => RendererLoadStatus::Ready {
+            plugin: active.plugin.expect("builtin renderer loads metadata"),
+        },
+        Err(status) => status,
+    }
+}
+
+fn load_renderer(
+    source: &RendererSource,
+    host_api_version: &str,
+) -> Result<ActiveRenderer, RendererLoadStatus> {
+    match source {
+        RendererSource::BuiltinDefault => {
+            let status = probe_renderer_descriptor(
+                builtin_default_renderer_descriptor(),
+                host_api_version,
+            );
+            match status {
+                RendererLoadStatus::Ready { plugin } => Ok(ActiveRenderer {
+                    plugin: Some(plugin),
+                    _library: None,
+                }),
+                status => Err(status),
+            }
+        }
+        RendererSource::DynamicLibrary(path) => {
+            load_dynamic_renderer(path, host_api_version)
+        }
+    }
+}
+
+fn load_dynamic_renderer(
+    plugin_library: &Path,
+    host_api_version: &str,
+) -> Result<ActiveRenderer, RendererLoadStatus> {
+    let (host_support, parsed_host_api_version) =
+        match parse_host_support(host_api_version) {
+            Ok(host_support) => host_support,
+            Err(status) => return Err(status),
+        };
+
+    let library = match unsafe { Library::new(plugin_library) } {
+        Ok(library) => library,
+        Err(err) => {
+            return Err(RendererLoadStatus::LoadFailure {
+                message: format!(
+                    "failed to load '{}': {err}",
+                    plugin_library.display()
+                ),
+            });
+        }
+    };
+
+    let entry = unsafe {
+        match library
+            .get::<RendererPluginEntryV1>(RENDERER_ENTRY_SYMBOL_V1.as_bytes())
+        {
+            Ok(symbol) => symbol,
+            Err(_) => {
+                return Err(RendererLoadStatus::MissingEntry {
+                    symbol: RENDERER_ENTRY_SYMBOL_V1.to_string(),
+                });
+            }
+        }
+    };
+
+    let descriptor = unsafe { entry() };
+    if descriptor.is_null() {
+        return Err(RendererLoadStatus::NullDescriptor {
+            symbol: RENDERER_ENTRY_SYMBOL_V1.to_string(),
+        });
+    }
+
+    let descriptor = unsafe { &*descriptor };
+    match validate_renderer_descriptor(
+        descriptor,
+        &host_support,
+        &parsed_host_api_version,
+    ) {
+        RendererLoadStatus::Ready { plugin } => Ok(ActiveRenderer {
+            plugin: Some(plugin),
+            _library: Some(library),
+        }),
+        status => Err(status),
+    }
 }
 
 fn parse_host_support(
@@ -205,7 +355,7 @@ mod tests {
         sync::{Mutex, OnceLock},
     };
 
-    use super::probe_renderer_plugin;
+    use super::{RendererHost, RendererSource, probe_renderer_plugin};
     use phidi_rpc::renderer::{
         CURRENT_RENDERER_ABI_VERSION, RENDERER_ENTRY_SYMBOL_V1,
         RendererAbiCompatibility, RendererHostSupport, RendererLoadStatus,
@@ -384,5 +534,56 @@ mod tests {
                 .actionable_message()
                 .contains("Fix the host version string")
         );
+    }
+
+    #[test]
+    fn renderer_host_start_stop_and_reload_are_deterministic() {
+        let mut host = RendererHost::new("0.1.3");
+
+        let ready = host
+            .start(RendererSource::DynamicLibrary(
+                ready_fixture().to_path_buf(),
+            ))
+            .plugin()
+            .unwrap()
+            .clone();
+        assert_eq!(ready.plugin_name, "throwaway-ready".to_string());
+
+        let stopped = host.stop();
+        assert!(stopped.is_stopped());
+        assert!(stopped.plugin().is_none());
+
+        let restarted = host.reload().expect("renderer should reload");
+        assert_eq!(
+            restarted.plugin().unwrap().plugin_name,
+            "throwaway-ready".to_string()
+        );
+    }
+
+    #[test]
+    fn renderer_host_reload_reuses_last_source_after_failure() {
+        let mut host = RendererHost::new("0.1.3");
+
+        let failed_status = host
+            .start(RendererSource::DynamicLibrary(
+                host_api_mismatch_fixture().to_path_buf(),
+            ))
+            .last_status()
+            .cloned();
+        assert_eq!(
+            failed_status,
+            Some(RendererLoadStatus::HostApiMismatch {
+                plugin: phidi_rpc::renderer::RendererPluginMetadata {
+                    plugin_name: "throwaway-host-api-mismatch".to_string(),
+                    plugin_version: "0.1.0".to_string(),
+                    abi_version: CURRENT_RENDERER_ABI_VERSION,
+                    host_api_requirement: ">=0.2.0, <0.3.0".to_string(),
+                },
+                host_support: RendererHostSupport::current_build("0.1.3"),
+            })
+        );
+
+        let failed_again = host.reload().expect("renderer should reload");
+        assert_eq!(failed_again.last_status(), failed_status.as_ref());
     }
 }

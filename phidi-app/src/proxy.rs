@@ -9,8 +9,8 @@ use floem::{ext_event::create_signal_from_channel, reactive::ReadSignal};
 use phidi_proxy::dispatch::Dispatcher;
 use phidi_rpc::{
     core::{CoreHandler, CoreNotification, CoreRpcHandler},
-    plugin::VoltID,
-    proxy::{ProxyRpcHandler, ProxyStatus},
+    plugin::{VoltCapability, VoltID},
+    proxy::{ProxyInitializeParams, ProxyRpcHandler, ProxyStatus},
     terminal::TermId,
 };
 use tracing::error;
@@ -48,6 +48,7 @@ impl ProxyData {
 pub fn new_proxy(
     workspace: Arc<PhidiWorkspace>,
     disabled_volts: Vec<VoltID>,
+    volt_capability_grants: HashMap<VoltID, Vec<VoltCapability>>,
     extra_plugin_paths: Vec<PathBuf>,
     plugin_configurations: HashMap<String, HashMap<String, serde_json::Value>>,
     term_tx: Sender<(TermId, TermEvent)>,
@@ -64,14 +65,15 @@ pub fn new_proxy(
                 core_rpc.notification(CoreNotification::ProxyStatus {
                     status: ProxyStatus::Connecting,
                 });
-                proxy_rpc.initialize(
-                    workspace.path.clone(),
+                proxy_rpc.initialize(ProxyInitializeParams {
+                    workspace: workspace.path.clone(),
                     disabled_volts,
                     extra_plugin_paths,
                     plugin_configurations,
-                    1,
-                    1,
-                );
+                    volt_capability_grants,
+                    window_id: 1,
+                    tab_id: 1,
+                });
 
                 match &workspace.kind {
                     PhidiWorkspaceType::Local => {

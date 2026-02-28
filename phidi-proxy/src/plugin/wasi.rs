@@ -14,8 +14,8 @@ use std::{
 use anyhow::{Result, anyhow};
 use jsonrpc_lite::{Id, Params};
 use lsp_types::{
-    DocumentFilter, InitializeParams, InitializedParams,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, Url,
+    DocumentFilter, InitializeParams, InitializedParams, MessageType,
+    ShowMessageParams, TextDocumentContentChangeEvent, TextDocumentIdentifier, Url,
     VersionedTextDocumentIdentifier, WorkDoneProgressParams, WorkspaceFolder,
     notification::Initialized, request::Initialize,
 };
@@ -23,7 +23,7 @@ use parking_lot::Mutex;
 use phidi_core::directory::Directory;
 use phidi_rpc::{
     RpcError,
-    plugin::{PluginId, VoltID, VoltInfo, VoltMetadata},
+    plugin::{PluginId, VoltCapability, VoltID, VoltInfo, VoltMetadata},
     style::LineStyle,
 };
 use phidi_xi_rope::{Rope, RopeDelta};
@@ -33,7 +33,9 @@ use wasi_experimental_http_wasmtime::{HttpCtx, HttpState};
 use wasmtime_wasi::WasiCtxBuilder;
 
 use super::{
-    PluginCatalogRpcHandler, client_capabilities,
+    PluginCatalogRpcHandler,
+    capabilities::{requested_capability_prompt, sandbox_capabilities},
+    client_capabilities,
     psp::{
         PluginHandlerNotification, PluginHostHandler, PluginServerHandler,
         PluginServerRpc, ResponseSender, RpcCallback, handle_plugin_server_message,
@@ -357,6 +359,7 @@ pub fn find_all_volts(extra_plugin_paths: &[PathBuf]) -> Vec<VoltMetadata> {
 ///         icon: None,
 ///         repository: None,
 ///         wasm: None,
+///         capabilities: None,
 ///         color_themes: None,
 ///         icon_themes: None,
 ///         dir: parent_path.canonicalize().ok(),
@@ -416,9 +419,25 @@ pub fn enable_volt(
 pub fn start_volt(
     workspace: Option<PathBuf>,
     configurations: Option<HashMap<String, serde_json::Value>>,
+    capability_grants: Vec<VoltCapability>,
     plugin_rpc: PluginCatalogRpcHandler,
     meta: VoltMetadata,
 ) -> Result<()> {
+    let allowed_capabilities = sandbox_capabilities(&meta, &capability_grants);
+    for capability in VoltCapability::ALL {
+        if meta.requests_capability(capability)
+            && !allowed_capabilities.contains(&capability)
+        {
+            plugin_rpc.core_rpc.show_message(
+                format!("Plugin Capability: {}", meta.display_name),
+                ShowMessageParams {
+                    typ: MessageType::INFO,
+                    message: requested_capability_prompt(&meta, capability),
+                },
+            );
+        }
+    }
+
     let engine = wasmtime::Engine::default();
     let module = wasmtime::Module::from_file(
         &engine,
@@ -428,8 +447,14 @@ pub fn start_volt(
     )?;
     let mut linker = wasmtime::Linker::new(&engine);
     wasmtime_wasi::add_to_linker(&mut linker, |s| s)?;
-    HttpState::new()?.add_to_linker(&mut linker, |_| HttpCtx {
-        allowed_hosts: Some(vec!["insecure:allow-all".to_string()]),
+    let http_allowed_hosts =
+        if allowed_capabilities.contains(&VoltCapability::Network) {
+            Some(vec!["insecure:allow-all".to_string()])
+        } else {
+            None
+        };
+    HttpState::new()?.add_to_linker(&mut linker, move |_| HttpCtx {
+        allowed_hosts: http_allowed_hosts.clone(),
         max_concurrent_requests: Some(100),
     })?;
 
@@ -465,7 +490,6 @@ pub fn start_volt(
     let stdout = Arc::new(RwLock::new(WasiPipe::new()));
     let stderr = Arc::new(RwLock::new(WasiPipe::new()));
     let wasi = WasiCtxBuilder::new()
-        .inherit_env()?
         .env("VOLT_OS", std::env::consts::OS)?
         .env("VOLT_ARCH", std::env::consts::ARCH)?
         .env("VOLT_LIBC", volt_libc)?
@@ -588,6 +612,7 @@ pub fn start_volt(
             plugin_rpc.core_rpc.clone(),
             rpc.clone(),
             plugin_rpc.clone(),
+            allowed_capabilities,
         ),
         configurations,
     };

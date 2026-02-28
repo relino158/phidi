@@ -1,3 +1,4 @@
+pub mod capabilities;
 pub mod catalog;
 pub mod dap;
 pub mod lsp;
@@ -66,7 +67,7 @@ use phidi_rpc::{
     RequestId, RpcError,
     core::CoreRpcHandler,
     dap_types::{self, DapId, RunDebugConfig, SourceBreakpoint, ThreadId},
-    plugin::{PluginId, VoltInfo, VoltMetadata},
+    plugin::{PluginId, VoltCapability, VoltID, VoltInfo, VoltMetadata},
     proxy::ProxyRpcHandler,
     style::LineStyle,
     terminal::TermId,
@@ -155,6 +156,7 @@ pub enum PluginCatalogRpc {
 #[allow(clippy::large_enum_variant)]
 pub enum PluginCatalogNotification {
     UpdatePluginConfigs(HashMap<String, HashMap<String, serde_json::Value>>),
+    UpdateVoltCapabilityGrants(HashMap<VoltID, Vec<VoltCapability>>),
     UnactivatedVolts(Vec<VoltMetadata>),
     PluginServerLoaded(PluginServerRpcHandler),
     InstallVolt(VoltInfo),
@@ -1326,6 +1328,15 @@ impl PluginCatalogRpcHandler {
         ))
     }
 
+    pub fn update_volt_capability_grants(
+        &self,
+        grants: HashMap<VoltID, Vec<VoltCapability>>,
+    ) -> Result<()> {
+        self.catalog_notification(
+            PluginCatalogNotification::UpdateVoltCapabilityGrants(grants),
+        )
+    }
+
     pub fn install_volt(&self, volt: VoltInfo) -> Result<()> {
         self.catalog_notification(PluginCatalogNotification::InstallVolt(volt))
     }
@@ -1604,6 +1615,7 @@ pub fn install_volt(
     catalog_rpc: PluginCatalogRpcHandler,
     workspace: Option<PathBuf>,
     configurations: Option<HashMap<String, serde_json::Value>>,
+    capability_grants: Vec<VoltCapability>,
     volt: VoltInfo,
 ) -> Result<()> {
     let download_volt_result = download_volt(&volt);
@@ -1616,9 +1628,13 @@ pub fn install_volt(
     let local_catalog_rpc = catalog_rpc.clone();
     let local_meta = meta.clone();
 
-    if let Err(err) =
-        start_volt(workspace, configurations, local_catalog_rpc, local_meta)
-    {
+    if let Err(err) = start_volt(
+        workspace,
+        configurations,
+        capability_grants,
+        local_catalog_rpc,
+        local_meta,
+    ) {
         tracing::error!("{:?}", err);
     }
     let icon = volt_icon(&meta);

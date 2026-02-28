@@ -18,7 +18,7 @@ use parking_lot::Mutex;
 use phidi_rpc::{
     RpcError,
     dap_types::{self, DapId, DapServer, SetBreakpointsResponse},
-    plugin::{PluginId, VoltID, VoltInfo, VoltMetadata},
+    plugin::{PluginId, VoltCapability, VoltID, VoltInfo, VoltMetadata},
     proxy::ProxyResponse,
     style::LineStyle,
 };
@@ -43,6 +43,7 @@ pub struct PluginCatalog {
     daps: HashMap<DapId, DapRpcHandler>,
     debuggers: HashMap<String, DebuggerData>,
     plugin_configurations: HashMap<String, HashMap<String, serde_json::Value>>,
+    volt_capability_grants: HashMap<VoltID, Vec<VoltCapability>>,
     unactivated_volts: HashMap<VoltID, VoltMetadata>,
     open_files: HashMap<PathBuf, String>,
 }
@@ -53,12 +54,14 @@ impl PluginCatalog {
         disabled_volts: Vec<VoltID>,
         extra_plugin_paths: Vec<PathBuf>,
         plugin_configurations: HashMap<String, HashMap<String, serde_json::Value>>,
+        volt_capability_grants: HashMap<VoltID, Vec<VoltCapability>>,
         plugin_rpc: PluginCatalogRpcHandler,
     ) -> Self {
         let plugin = Self {
             workspace,
             plugin_rpc: plugin_rpc.clone(),
             plugin_configurations,
+            volt_capability_grants,
             plugins: HashMap::new(),
             daps: HashMap::new(),
             debuggers: HashMap::new(),
@@ -207,12 +210,21 @@ impl PluginCatalog {
             if let Some(meta) = self.unactivated_volts.remove(id) {
                 let configurations =
                     self.plugin_configurations.get(&meta.name).cloned();
+                let capability_grants = self
+                    .volt_capability_grants
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_default();
                 tracing::debug!("{:?} {:?}", id, configurations);
                 let plugin_rpc = self.plugin_rpc.clone();
                 thread::spawn(move || {
-                    if let Err(err) =
-                        start_volt(workspace, configurations, plugin_rpc, meta)
-                    {
+                    if let Err(err) = start_volt(
+                        workspace,
+                        configurations,
+                        capability_grants,
+                        plugin_rpc,
+                        meta,
+                    ) {
                         tracing::error!("{:?}", err);
                     }
                 });
@@ -488,6 +500,10 @@ impl PluginCatalog {
                 tracing::debug!("UpdatePluginConfigs {:?}", configs);
                 self.plugin_configurations = configs;
             }
+            UpdateVoltCapabilityGrants(grants) => {
+                tracing::debug!("UpdateVoltCapabilityGrants {:?}", grants);
+                self.volt_capability_grants = grants;
+            }
             PluginServerLoaded(plugin) => {
                 // TODO: check if the server has did open registered
                 match self.plugin_rpc.proxy_rpc.get_open_files_content() {
@@ -532,12 +548,21 @@ impl PluginCatalog {
                 let workspace = self.workspace.clone();
                 let configurations =
                     self.plugin_configurations.get(&volt.name).cloned();
+                let capability_grants = self
+                    .volt_capability_grants
+                    .get(&volt.id())
+                    .cloned()
+                    .unwrap_or_default();
                 let catalog_rpc = self.plugin_rpc.clone();
                 catalog_rpc.stop_volt(volt.clone());
                 thread::spawn(move || {
-                    if let Err(err) =
-                        install_volt(catalog_rpc, workspace, configurations, volt)
-                    {
+                    if let Err(err) = install_volt(
+                        catalog_rpc,
+                        workspace,
+                        configurations,
+                        capability_grants,
+                        volt,
+                    ) {
                         tracing::error!("{:?}", err);
                     }
                 });

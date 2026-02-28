@@ -130,7 +130,7 @@ Selectively apply these to critical code:
 <!-- gitnexus:start -->
 # GitNexus MCP
 
-This project is indexed by GitNexus as **phidi-a0** (2648 symbols, 12063 relationships, 300 execution flows).
+This project is indexed by GitNexus as **phidi-a1** (2745 symbols, 12362 relationships, 300 execution flows).
 
 GitNexus provides a knowledge graph over this codebase — call chains, blast radius, execution flows, and semantic search.
 
