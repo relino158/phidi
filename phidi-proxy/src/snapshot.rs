@@ -9,9 +9,9 @@ use git2::{ErrorCode::NotFound, Repository, StatusOptions};
 use phidi_core::{
     directory::Directory,
     semantic_map::{
-        CURRENT_SCHEMA_VERSION, SchemaCompatibility, SchemaVersion,
-        SnapshotCompleteness, SnapshotFreshness, SnapshotProvenance,
-        WorkspaceSnapshot,
+        CURRENT_SCHEMA_VERSION, MINIMUM_READABLE_SCHEMA_VERSION,
+        SchemaCompatibility, SchemaVersion, SnapshotCompleteness,
+        SnapshotFreshness, SnapshotProvenance, WorkspaceSnapshot,
     },
 };
 use phidi_rpc::core::{
@@ -210,10 +210,11 @@ impl SnapshotRecoveryStatus {
                 found_version,
                 compatibility,
             } => Some(format!(
-                "Ignoring incompatible workspace snapshot at {} (found schema {}, status {:?}). Rebuild the snapshot with the current proxy.",
+                "Ignoring incompatible workspace snapshot at {}: {}. Supported snapshot schemas for this build are {} through {}. Rebuild the snapshot with the current proxy.",
                 path.display(),
-                found_version,
-                compatibility
+                incompatible_schema_guidance(*found_version, *compatibility),
+                MINIMUM_READABLE_SCHEMA_VERSION,
+                CURRENT_SCHEMA_VERSION,
             )),
             Self::Corrupt {
                 path,
@@ -227,6 +228,23 @@ impl SnapshotRecoveryStatus {
                 column,
                 detail
             )),
+        }
+    }
+}
+
+fn incompatible_schema_guidance(
+    found_version: SchemaVersion,
+    compatibility: SchemaCompatibility,
+) -> String {
+    match compatibility {
+        SchemaCompatibility::TooOld => {
+            format!("found schema {} which is too old to read", found_version)
+        }
+        SchemaCompatibility::TooNew => {
+            format!("found schema {} which is too new to read", found_version)
+        }
+        SchemaCompatibility::Current | SchemaCompatibility::Compatible => {
+            format!("found schema {} with unexpected compatibility state", found_version)
         }
     }
 }
@@ -514,8 +532,9 @@ mod tests {
 
     use git2::{Repository, Signature};
     use phidi_core::semantic_map::{
-        CURRENT_SCHEMA_VERSION, SchemaCompatibility, SchemaVersion,
-        SnapshotCompleteness, SnapshotDiagnostic, SnapshotFreshness, SnapshotKind,
+        CURRENT_SCHEMA_VERSION, MINIMUM_READABLE_SCHEMA_VERSION,
+        SchemaCompatibility, SchemaVersion, SnapshotCompleteness,
+        SnapshotDiagnostic, SnapshotFreshness, SnapshotKind,
         SnapshotProvenance, WorkspaceSnapshot,
     };
     use phidi_rpc::core::{
@@ -553,6 +572,19 @@ mod tests {
     ) -> PathBuf {
         let snapshot = snapshot_fixture();
         store.save(workspace_root, &snapshot).unwrap()
+    }
+
+    fn rewrite_snapshot_version(
+        snapshot_path: &Path,
+        schema_version: SchemaVersion,
+    ) {
+        let mut serialized = serde_json::to_value(snapshot_fixture()).unwrap();
+        serialized["schema_version"] = json!({
+            "major": schema_version.major,
+            "minor": schema_version.minor,
+        });
+        fs::write(snapshot_path, serde_json::to_vec_pretty(&serialized).unwrap())
+            .unwrap();
     }
 
     fn recv_notification(core_rpc: &CoreRpcHandler) -> CoreNotification {
@@ -698,17 +730,13 @@ mod tests {
         fs::create_dir_all(&workspace_root).unwrap();
 
         let snapshot_path = snapshot_path_for(&store, &workspace_root);
-        let mut serialized = serde_json::to_value(snapshot_fixture()).unwrap();
-        let incompatible_version = json!({
-            "major": CURRENT_SCHEMA_VERSION.major + 1,
-            "minor": CURRENT_SCHEMA_VERSION.minor,
-        });
-        serialized["schema_version"] = incompatible_version;
-        fs::write(
+        rewrite_snapshot_version(
             &snapshot_path,
-            serde_json::to_vec_pretty(&serialized).unwrap(),
-        )
-        .unwrap();
+            SchemaVersion {
+                major: CURRENT_SCHEMA_VERSION.major + 1,
+                minor: CURRENT_SCHEMA_VERSION.minor,
+            },
+        );
 
         assert_eq!(
             store.load(&workspace_root).unwrap(),
@@ -723,6 +751,65 @@ mod tests {
                 },
             )
         );
+    }
+
+    #[test]
+    fn loads_previous_minor_schema_snapshots() {
+        assert!(
+            CURRENT_SCHEMA_VERSION.minor > 0,
+            "compatibility matrix requires a current schema with a previous minor"
+        );
+
+        let tempdir = tempdir().unwrap();
+        let store = SnapshotStore::from_directory(tempdir.path().join("snapshots"));
+        let workspace_root = workspace_root(&tempdir);
+        fs::create_dir_all(&workspace_root).unwrap();
+
+        let snapshot_path = snapshot_path_for(&store, &workspace_root);
+        let previous_minor = SchemaVersion::new(
+            CURRENT_SCHEMA_VERSION.major,
+            CURRENT_SCHEMA_VERSION.minor - 1,
+        );
+        rewrite_snapshot_version(&snapshot_path, previous_minor);
+
+        let SnapshotLoadResult::Loaded(snapshot) = store.load(&workspace_root).unwrap()
+        else {
+            panic!("expected previous minor snapshot to load");
+        };
+
+        assert_eq!(snapshot.schema_version, previous_minor);
+    }
+
+    #[test]
+    fn incompatible_schema_guidance_explains_supported_reader_window() {
+        let too_old = SnapshotRecoveryStatus::IncompatibleSchema {
+            path: PathBuf::from("/tmp/old-snapshot.json"),
+            found_version: SchemaVersion::new(
+                CURRENT_SCHEMA_VERSION.major - 1,
+                CURRENT_SCHEMA_VERSION.minor,
+            ),
+            compatibility: SchemaCompatibility::TooOld,
+        };
+        let too_new = SnapshotRecoveryStatus::IncompatibleSchema {
+            path: PathBuf::from("/tmp/new-snapshot.json"),
+            found_version: SchemaVersion::new(
+                CURRENT_SCHEMA_VERSION.major,
+                CURRENT_SCHEMA_VERSION.minor + 1,
+            ),
+            compatibility: SchemaCompatibility::TooNew,
+        };
+
+        let too_old_message = too_old.log_message().unwrap();
+        assert!(too_old_message.contains("too old"));
+        assert!(too_old_message.contains(&MINIMUM_READABLE_SCHEMA_VERSION.to_string()));
+        assert!(too_old_message.contains(&CURRENT_SCHEMA_VERSION.to_string()));
+        assert!(too_old_message.contains("Rebuild the snapshot"));
+
+        let too_new_message = too_new.log_message().unwrap();
+        assert!(too_new_message.contains("too new"));
+        assert!(too_new_message.contains(&MINIMUM_READABLE_SCHEMA_VERSION.to_string()));
+        assert!(too_new_message.contains(&CURRENT_SCHEMA_VERSION.to_string()));
+        assert!(too_new_message.contains("Rebuild the snapshot"));
     }
 
     #[test]
@@ -797,16 +884,13 @@ mod tests {
         fs::create_dir_all(&workspace_root).unwrap();
 
         let snapshot_path = snapshot_path_for(&store, &workspace_root);
-        let mut serialized = serde_json::to_value(snapshot_fixture()).unwrap();
-        serialized["schema_version"] = json!({
-            "major": CURRENT_SCHEMA_VERSION.major + 1,
-            "minor": CURRENT_SCHEMA_VERSION.minor,
-        });
-        fs::write(
+        rewrite_snapshot_version(
             &snapshot_path,
-            serde_json::to_vec_pretty(&serialized).unwrap(),
-        )
-        .unwrap();
+            SchemaVersion::new(
+                CURRENT_SCHEMA_VERSION.major + 1,
+                CURRENT_SCHEMA_VERSION.minor,
+            ),
+        );
 
         let core_rpc = CoreRpcHandler::new();
         let startup_store = SnapshotStore::from_directory(store_root);
