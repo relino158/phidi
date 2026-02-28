@@ -382,6 +382,30 @@ pub enum PhidiWorkbenchCommand {
     #[strum(serialize = "palette.command")]
     PaletteCommand,
 
+    #[strum(message = "Atlas: Run Concept Discovery")]
+    #[strum(serialize = "atlas.concept_discovery")]
+    AtlasConceptDiscovery,
+
+    #[strum(message = "Atlas: Run Entity Briefing")]
+    #[strum(serialize = "atlas.entity_briefing")]
+    AtlasEntityBriefing,
+
+    #[strum(message = "Atlas: Run Blast Radius Estimation")]
+    #[strum(serialize = "atlas.blast_radius_estimation")]
+    AtlasBlastRadiusEstimation,
+
+    #[strum(message = "Atlas: Run Delta Impact Scan")]
+    #[strum(serialize = "atlas.delta_impact_scan")]
+    AtlasDeltaImpactScan,
+
+    #[strum(message = "Atlas: Run Rename Planning")]
+    #[strum(serialize = "atlas.rename_planning")]
+    AtlasRenamePlanning,
+
+    #[strum(message = "Atlas: Run Structural Query")]
+    #[strum(serialize = "atlas.structural_query")]
+    AtlasStructuralQuery,
+
     #[strum(message = "Open Recent Workspace")]
     #[strum(serialize = "palette.workspace")]
     PaletteWorkspace,

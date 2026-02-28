@@ -8,6 +8,7 @@ use crate::config::icon::PhidiIcons;
     Clone, Copy, PartialEq, Serialize, Deserialize, Hash, Eq, Debug, EnumIter,
 )]
 pub enum PanelKind {
+    Atlas,
     Terminal,
     FileExplorer,
     SourceControl,
@@ -24,6 +25,7 @@ pub enum PanelKind {
 impl PanelKind {
     pub fn svg_name(&self) -> &'static str {
         match &self {
+            PanelKind::Atlas => PhidiIcons::DEBUG_ALT,
             PanelKind::Terminal => PhidiIcons::TERMINAL,
             PanelKind::FileExplorer => PhidiIcons::FILE_EXPLORER,
             PanelKind::SourceControl => PhidiIcons::SCM,
@@ -50,6 +52,7 @@ impl PanelKind {
 
     pub fn default_position(&self) -> PanelPosition {
         match self {
+            PanelKind::Atlas => PanelPosition::BottomRight,
             PanelKind::Terminal => PanelPosition::BottomLeft,
             PanelKind::FileExplorer => PanelPosition::LeftTop,
             PanelKind::SourceControl => PanelPosition::LeftTop,
