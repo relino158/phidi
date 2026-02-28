@@ -72,3 +72,4 @@ branch = "lapce"
 
 [dev-dependencies]
 syn = { version = "2.0", features = ["full", "parsing", "visit"] }
+tempfile = { workspace = true }

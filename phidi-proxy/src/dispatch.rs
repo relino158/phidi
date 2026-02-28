@@ -45,6 +45,7 @@ use phidi_xi_rope::Rope;
 use crate::{
     buffer::{Buffer, get_mod_time, load_file},
     plugin::{PluginCatalogRpcHandler, catalog::PluginCatalog},
+    snapshot::load_workspace_snapshot_for_startup,
     terminal::{Terminal, TerminalSender},
     watcher::{FileWatcher, Notify, WatchToken},
 };
@@ -85,6 +86,7 @@ impl ProxyHandler for Dispatcher {
                     self.proxy_rpc.clone(),
                 ));
                 if let Some(workspace) = self.workspace.as_ref() {
+                    load_workspace_snapshot_for_startup(&self.core_rpc, workspace);
                     self.file_watcher
                         .watch(workspace, true, WORKSPACE_EVENT_TOKEN);
                 }
