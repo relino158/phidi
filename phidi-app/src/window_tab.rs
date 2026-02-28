@@ -53,6 +53,9 @@ use tracing::{Level, debug, error, event};
 
 use crate::{
     about::AboutData,
+    agent_workbench::{
+        AgentCapabilityKind, AgentWorkbenchData, capability_from_command,
+    },
     alert::{AlertBoxData, AlertButton},
     code_action::{CodeActionData, CodeActionStatus},
     command::{
@@ -181,6 +184,7 @@ pub struct WindowTabData {
     pub source_control: SourceControlData,
     pub rename: RenameData,
     pub global_search: GlobalSearchData,
+    pub agent_workbench: AgentWorkbenchData,
     pub call_hierarchy_data: CallHierarchyData,
     pub about_data: AboutData,
     pub alert_data: AlertBoxData,
@@ -511,6 +515,7 @@ impl WindowTabData {
 
         let rename = RenameData::new(cx, main_split.editors, common.clone());
         let global_search = GlobalSearchData::new(cx, main_split.clone());
+        let agent_workbench = AgentWorkbenchData::new(cx);
 
         let plugin = PluginData::new(
             cx,
@@ -558,6 +563,7 @@ impl WindowTabData {
             plugin,
             rename,
             global_search,
+            agent_workbench,
             call_hierarchy_data: CallHierarchyData {
                 root: cx.create_rw_signal(None),
                 common: common.clone(),
@@ -718,6 +724,11 @@ impl WindowTabData {
         cmd: PhidiWorkbenchCommand,
         data: Option<Value>,
     ) {
+        if let Some(capability) = capability_from_command(cmd.clone()) {
+            self.run_agent_capability(capability);
+            return;
+        }
+
         use PhidiWorkbenchCommand::*;
         match cmd {
             // ==== Modal ====
@@ -1579,8 +1590,20 @@ impl WindowTabData {
                     editor_data.receive_char(DEFAULT_RUN_TOML);
                 }
             }
+            AtlasConceptDiscovery
+            | AtlasEntityBriefing
+            | AtlasBlastRadiusEstimation
+            | AtlasDeltaImpactScan
+            | AtlasRenamePlanning
+            | AtlasStructuralQuery => {}
 
         }
+    }
+
+    pub fn run_agent_capability(&self, capability: AgentCapabilityKind) {
+        self.panel.show_panel(&PanelKind::Atlas);
+        self.common.focus.set(Focus::Panel(PanelKind::Atlas));
+        self.agent_workbench.submit(self.scope, capability);
     }
 
     pub fn run_internal_command(&self, cmd: InternalCommand) {
@@ -2629,7 +2652,8 @@ impl WindowTabData {
     /// Toggle a specific kind of panel.
     fn toggle_panel_focus(&self, kind: PanelKind) {
         let should_hide = match kind {
-            PanelKind::FileExplorer
+            PanelKind::Atlas
+            | PanelKind::FileExplorer
             | PanelKind::Plugin
             | PanelKind::Problem
             | PanelKind::Debug

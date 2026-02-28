@@ -46,6 +46,7 @@ pub fn default_panel_order() -> PanelOrder {
         PanelPosition::RightTop,
         im::vector![PanelKind::DocumentSymbol,],
     );
+    order.insert(PanelPosition::BottomRight, im::vector![PanelKind::Atlas,]);
 
     order
 }
@@ -63,6 +64,9 @@ pub enum PanelSection {
     Variable,
     StackFrame,
     Breakpoint,
+    AtlasRequest,
+    AtlasResponse,
+    AtlasHistory,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

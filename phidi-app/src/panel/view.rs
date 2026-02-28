@@ -17,6 +17,7 @@ use floem::{
 };
 
 use super::{
+    agent_view::agent_panel,
     debug_view::debug_panel,
     global_search_view::global_search_panel,
     kind::PanelKind,
@@ -471,6 +472,9 @@ fn panel_view(
         |p| *p,
         move |kind| {
             let view = match kind {
+                PanelKind::Atlas => {
+                    agent_panel(window_tab_data.clone(), position).into_any()
+                }
                 PanelKind::Terminal => {
                     terminal_panel(window_tab_data.clone()).into_any()
                 }
@@ -552,6 +556,7 @@ fn panel_picker(
         move |p| {
             let window_tab_data = window_tab_data.clone();
             let tooltip = match p {
+                PanelKind::Atlas => "Atlas",
                 PanelKind::Terminal => "Terminal",
                 PanelKind::FileExplorer => "File Explorer",
                 PanelKind::SourceControl => "Source Control",
