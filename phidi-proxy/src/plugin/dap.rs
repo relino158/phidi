@@ -4,16 +4,17 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     thread,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
 use phidi_rpc::{
+    RpcError,
     dap_types::{
         self, ConfigurationDone, Continue, ContinueArguments, ContinueResponse,
         DapEvent, DapId, DapPayload, DapRequest, DapResponse, DapServer,
@@ -27,13 +28,12 @@ use phidi_rpc::{
         Variables, VariablesArguments, VariablesResponse,
     },
     terminal::TermId,
-    RpcError,
 };
 use serde_json::Value;
 
 use super::{
-    psp::{ResponseHandler, RpcCallback},
     PluginCatalogRpcHandler,
+    psp::{ResponseHandler, RpcCallback},
 };
 
 pub struct DapClient {
