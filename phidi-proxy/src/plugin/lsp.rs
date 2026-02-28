@@ -8,7 +8,7 @@ use std::{
     thread,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use jsonrpc_lite::{Id, Params};
 use lsp_types::{
     notification::{Initialized, Notification},
@@ -18,9 +18,9 @@ use lsp_types::{
 use parking_lot::Mutex;
 use phidi_core::meta;
 use phidi_rpc::{
-    RpcError,
     plugin::{PluginId, VoltID},
     style::LineStyle,
+    RpcError,
 };
 use phidi_xi_rope::Rope;
 use serde_json::Value;
@@ -28,9 +28,8 @@ use serde_json::Value;
 use super::{
     client_capabilities,
     psp::{
-        PluginHandlerNotification, PluginHostHandler, PluginServerHandler,
-        PluginServerRpcHandler, ResponseSender, RpcCallback,
-        handle_plugin_server_message,
+        handle_plugin_server_message, PluginHandlerNotification, PluginHostHandler,
+        PluginServerHandler, PluginServerRpcHandler, ResponseSender, RpcCallback,
     },
 };
 use crate::{buffer::Buffer, plugin::PluginCatalogRpcHandler};

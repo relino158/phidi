@@ -463,11 +463,9 @@ mod tests {
 
         let error = store.save(&workspace_root, &snapshot).unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("refusing to persist snapshot schema")
-        );
+        assert!(error
+            .to_string()
+            .contains("refusing to persist snapshot schema"));
     }
 
     #[test]

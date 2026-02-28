@@ -11,20 +11,20 @@ use std::{
     thread,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use jsonrpc_lite::{Id, Params};
 use lsp_types::{
-    DocumentFilter, InitializeParams, InitializedParams,
-    TextDocumentContentChangeEvent, TextDocumentIdentifier, Url,
-    VersionedTextDocumentIdentifier, WorkDoneProgressParams, WorkspaceFolder,
-    notification::Initialized, request::Initialize,
+    notification::Initialized, request::Initialize, DocumentFilter,
+    InitializeParams, InitializedParams, TextDocumentContentChangeEvent,
+    TextDocumentIdentifier, Url, VersionedTextDocumentIdentifier,
+    WorkDoneProgressParams, WorkspaceFolder,
 };
 use parking_lot::Mutex;
 use phidi_core::directory::Directory;
 use phidi_rpc::{
-    RpcError,
     plugin::{PluginId, VoltID, VoltInfo, VoltMetadata},
     style::LineStyle,
+    RpcError,
 };
 use phidi_xi_rope::{Rope, RopeDelta};
 use psp_types::{Notification, Request};
@@ -33,12 +33,12 @@ use wasi_experimental_http_wasmtime::{HttpCtx, HttpState};
 use wasmtime_wasi::WasiCtxBuilder;
 
 use super::{
-    PluginCatalogRpcHandler, client_capabilities,
+    client_capabilities,
     psp::{
-        PluginHandlerNotification, PluginHostHandler, PluginServerHandler,
-        PluginServerRpc, ResponseSender, RpcCallback, handle_plugin_server_message,
+        handle_plugin_server_message, PluginHandlerNotification, PluginHostHandler,
+        PluginServerHandler, PluginServerRpc, ResponseSender, RpcCallback,
     },
-    volt_icon,
+    volt_icon, PluginCatalogRpcHandler,
 };
 use crate::plugin::psp::PluginServerRpcHandler;
 
