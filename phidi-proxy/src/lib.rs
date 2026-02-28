@@ -3,6 +3,7 @@
 pub mod buffer;
 pub mod cli;
 pub mod dispatch;
+pub mod git_workspace;
 pub mod plugin;
 pub mod query;
 pub mod rust_snapshot;

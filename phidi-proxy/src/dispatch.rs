@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs, io,
     path::{Path, PathBuf},
     sync::{
@@ -13,9 +13,7 @@ use std::{
 use alacritty_terminal::{event::WindowSize, event_loop::Msg};
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::Sender;
-use git2::{
-    DiffOptions, ErrorCode::NotFound, Oid, Repository, build::CheckoutBuilder,
-};
+use git2::{ErrorCode::NotFound, Repository, build::CheckoutBuilder};
 use grep_matcher::Matcher;
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{SearcherBuilder, sinks::UTF8};
@@ -44,6 +42,7 @@ use phidi_xi_rope::Rope;
 
 use crate::{
     buffer::{Buffer, get_mod_time, load_file},
+    git_workspace::diff_info as git_diff_info,
     plugin::{PluginCatalogRpcHandler, catalog::PluginCatalog},
     snapshot::load_workspace_snapshot_for_startup,
     terminal::{Terminal, TerminalSender},
@@ -1492,130 +1491,8 @@ fn git_discard_workspace_changes(workspace_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn git_delta_format(
-    workspace_path: &Path,
-    delta: &git2::DiffDelta,
-) -> Option<(git2::Delta, git2::Oid, PathBuf)> {
-    match delta.status() {
-        git2::Delta::Added | git2::Delta::Untracked => Some((
-            git2::Delta::Added,
-            delta.new_file().id(),
-            delta.new_file().path().map(|p| workspace_path.join(p))?,
-        )),
-        git2::Delta::Deleted => Some((
-            git2::Delta::Deleted,
-            delta.old_file().id(),
-            delta.old_file().path().map(|p| workspace_path.join(p))?,
-        )),
-        git2::Delta::Modified => Some((
-            git2::Delta::Modified,
-            delta.new_file().id(),
-            delta.new_file().path().map(|p| workspace_path.join(p))?,
-        )),
-        _ => None,
-    }
-}
-
 fn git_diff_new(workspace_path: &Path) -> Option<DiffInfo> {
-    let repo = Repository::discover(workspace_path).ok()?;
-    let name = match repo.head() {
-        Ok(head) => head.shorthand()?.to_string(),
-        _ => "(No branch)".to_owned(),
-    };
-
-    let mut branches = Vec::new();
-    for branch in repo.branches(None).ok()? {
-        branches.push(branch.ok()?.0.name().ok()??.to_string());
-    }
-
-    let mut tags = Vec::new();
-    if let Ok(git_tags) = repo.tag_names(None) {
-        for tag in git_tags.into_iter().flatten() {
-            tags.push(tag.to_owned());
-        }
-    }
-
-    let mut deltas = Vec::new();
-    let mut diff_options = DiffOptions::new();
-    let diff = repo
-        .diff_index_to_workdir(
-            None,
-            Some(
-                diff_options
-                    .include_untracked(true)
-                    .recurse_untracked_dirs(true),
-            ),
-        )
-        .ok()?;
-    for delta in diff.deltas() {
-        if let Some(delta) = git_delta_format(workspace_path, &delta) {
-            deltas.push(delta);
-        }
-    }
-
-    let oid = match repo.revparse_single("HEAD^{tree}") {
-        Ok(obj) => obj.id(),
-        _ => Oid::zero(),
-    };
-
-    let cached_diff = repo
-        .diff_tree_to_index(repo.find_tree(oid).ok().as_ref(), None, None)
-        .ok();
-
-    if let Some(cached_diff) = cached_diff {
-        for delta in cached_diff.deltas() {
-            if let Some(delta) = git_delta_format(workspace_path, &delta) {
-                deltas.push(delta);
-            }
-        }
-    }
-    let mut renames = Vec::new();
-    let mut renamed_deltas = HashSet::new();
-
-    for (added_index, delta) in deltas.iter().enumerate() {
-        if delta.0 == git2::Delta::Added {
-            for (deleted_index, d) in deltas.iter().enumerate() {
-                if d.0 == git2::Delta::Deleted && d.1 == delta.1 {
-                    renames.push((added_index, deleted_index));
-                    renamed_deltas.insert(added_index);
-                    renamed_deltas.insert(deleted_index);
-                    break;
-                }
-            }
-        }
-    }
-
-    let mut file_diffs = Vec::new();
-    for (added_index, deleted_index) in renames.iter() {
-        file_diffs.push(FileDiff::Renamed(
-            deltas[*added_index].2.clone(),
-            deltas[*deleted_index].2.clone(),
-        ));
-    }
-    for (i, delta) in deltas.iter().enumerate() {
-        if renamed_deltas.contains(&i) {
-            continue;
-        }
-        let diff = match delta.0 {
-            git2::Delta::Added => FileDiff::Added(delta.2.clone()),
-            git2::Delta::Deleted => FileDiff::Deleted(delta.2.clone()),
-            git2::Delta::Modified => FileDiff::Modified(delta.2.clone()),
-            _ => continue,
-        };
-        file_diffs.push(diff);
-    }
-    file_diffs.sort_by_key(|d| match d {
-        FileDiff::Modified(p)
-        | FileDiff::Added(p)
-        | FileDiff::Renamed(p, _)
-        | FileDiff::Deleted(p) => p.clone(),
-    });
-    Some(DiffInfo {
-        head: name,
-        branches,
-        tags,
-        diffs: file_diffs,
-    })
+    git_diff_info(workspace_path)
 }
 
 fn file_get_head(workspace_path: &Path, path: &Path) -> Result<(String, String)> {

@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    path::Path,
+};
 
 use phidi_core::semantic_map::{
     Certainty as SemanticCertainty, CertaintyKind as SemanticCertaintyKind,
@@ -6,18 +9,23 @@ use phidi_core::semantic_map::{
     SemanticEntity, SemanticRelationship, WorkspaceSnapshot,
 };
 use phidi_rpc::agent::{
-    AgentEntity, AgentEntityKind, AgentRelationshipKind, BlastRadiusRequest,
-    BlastRadiusResult, CapabilityError, CapabilityErrorCode, CapabilityResponse,
-    ConceptDiscoveryRequest, ConceptDiscoveryResult, ConceptMatch,
+    AgentEntity, AgentEntityKind, AgentRelationshipKind, AnalysisCompleteness,
+    BlastRadiusRequest, BlastRadiusResult, CapabilityError, CapabilityErrorCode,
+    CapabilityResponse, ConceptDiscoveryRequest, ConceptDiscoveryResult,
+    ConceptMatch, DeltaImpactScanRequest, DeltaImpactScanResult,
     EntityBriefingRequest, EntityBriefingResult, EntityLocation, EntitySelector,
-    ImpactTarget, Provenance, ProvenanceSource, RelatedEntity,
+    FileImpact, ImpactTarget, Provenance, ProvenanceSource, RelatedEntity,
     RelationshipDirection, TextPoint, TextSpan, UnresolvedReference,
 };
+use phidi_rpc::source_control::FileDiff;
+
+use crate::git_workspace::collect_working_tree_diffs;
 
 const CONCEPT_PREVIEW_RELATIONSHIP_LIMIT: usize = 2;
 
 pub struct SnapshotQueryService<'a> {
     entities_by_id: BTreeMap<&'a str, &'a SemanticEntity>,
+    entities_by_path: BTreeMap<&'a str, Vec<&'a SemanticEntity>>,
     inbound_by_target: BTreeMap<&'a str, Vec<&'a SemanticRelationship>>,
     outbound_by_source: BTreeMap<&'a str, Vec<&'a SemanticRelationship>>,
 }
@@ -25,8 +33,15 @@ pub struct SnapshotQueryService<'a> {
 impl<'a> SnapshotQueryService<'a> {
     pub fn new(snapshot: &'a WorkspaceSnapshot) -> Self {
         let mut entities_by_id = BTreeMap::new();
+        let mut entities_by_path = BTreeMap::<&str, Vec<&SemanticEntity>>::new();
         for entity in &snapshot.entities {
             entities_by_id.insert(entity.id.0.as_str(), entity);
+            if let Some(location) = entity.location.as_ref() {
+                entities_by_path
+                    .entry(location.path.as_str())
+                    .or_default()
+                    .push(entity);
+            }
         }
 
         let mut inbound_by_target =
@@ -80,9 +95,13 @@ impl<'a> SnapshotQueryService<'a> {
                     })
             });
         }
+        for entities in entities_by_path.values_mut() {
+            entities.sort_by(|left, right| compare_entities(left, right));
+        }
 
         Self {
             entities_by_id,
+            entities_by_path,
             inbound_by_target,
             outbound_by_source,
         }
@@ -280,6 +299,51 @@ impl<'a> SnapshotQueryService<'a> {
                 direct_impacts,
                 indirect_impacts,
                 unresolved_references,
+            },
+        }
+    }
+
+    pub fn delta_impact_scan(
+        &self,
+        workspace_root: &Path,
+        request: DeltaImpactScanRequest,
+    ) -> CapabilityResponse<DeltaImpactScanResult> {
+        let diffs = match collect_working_tree_diffs(workspace_root, request.scope) {
+            Ok(diffs) => diffs,
+            Err(error) => {
+                return CapabilityResponse::Error {
+                    error: CapabilityError {
+                        code: CapabilityErrorCode::Internal,
+                        message: format!(
+                            "failed to inspect working-tree changes: {error}"
+                        ),
+                        retryable: true,
+                    },
+                };
+            }
+        };
+
+        let mut completeness = AnalysisCompleteness::Complete;
+        let file_impacts = diffs
+            .iter()
+            .map(|diff| {
+                let path = diff_display_path(workspace_root, diff);
+                let impacted_entities =
+                    self.impacted_entities_for_diff(workspace_root, diff);
+                if impacted_entities.is_empty() {
+                    completeness = AnalysisCompleteness::Partial;
+                }
+                FileImpact {
+                    path,
+                    impacted_entities,
+                }
+            })
+            .collect();
+
+        CapabilityResponse::Success {
+            result: DeltaImpactScanResult {
+                completeness,
+                file_impacts,
             },
         }
     }
@@ -499,6 +563,43 @@ impl<'a> SnapshotQueryService<'a> {
             provenance: map_provenance(&relationship.provenance),
         }
     }
+
+    fn impacted_entities_for_diff(
+        &self,
+        workspace_root: &Path,
+        diff: &FileDiff,
+    ) -> Vec<ImpactTarget> {
+        let mut entities = BTreeMap::new();
+        for path in diff_lookup_paths(workspace_root, diff) {
+            if let Some(candidates) = self.entities_by_path.get(path.as_str()) {
+                for entity in candidates {
+                    entities.insert(entity.id.0.as_str(), *entity);
+                }
+            }
+        }
+
+        entities
+            .into_values()
+            .map(|entity| ImpactTarget {
+                entity: self.agent_entity(entity),
+                depth: 1,
+                reason: Some(format!(
+                    "{} is located in changed file {}.",
+                    entity.name,
+                    entity
+                        .location
+                        .as_ref()
+                        .map(|location| location.path.as_str())
+                        .unwrap_or_default()
+                )),
+                certainty: phidi_rpc::agent::Certainty::observed(),
+                provenance: Provenance {
+                    source: ProvenanceSource::WorkingTree,
+                    detail: Some(diff_reason(diff)),
+                },
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -515,6 +616,17 @@ struct MatchScore {
 struct RankedConceptMatch {
     score: MatchScore,
     result: ConceptMatch,
+}
+
+fn compare_entities(
+    left: &SemanticEntity,
+    right: &SemanticEntity,
+) -> std::cmp::Ordering {
+    entity_kind_rank(left.kind)
+        .cmp(&entity_kind_rank(right.kind))
+        .then_with(|| left.name.cmp(&right.name))
+        .then_with(|| left.qualified_name.cmp(&right.qualified_name))
+        .then_with(|| left.id.0.cmp(&right.id.0))
 }
 
 fn invalid_request_error(selector: &EntitySelector) -> CapabilityError {
@@ -547,6 +659,24 @@ fn map_entity_kind(kind: EntityKind) -> AgentEntityKind {
         EntityKind::Test => AgentEntityKind::Test,
         EntityKind::Trait => AgentEntityKind::Trait,
         EntityKind::Workspace => AgentEntityKind::Workspace,
+    }
+}
+
+fn entity_kind_rank(kind: EntityKind) -> u8 {
+    match kind {
+        EntityKind::Workspace => 0,
+        EntityKind::Package => 1,
+        EntityKind::Module => 2,
+        EntityKind::File => 3,
+        EntityKind::Import => 4,
+        EntityKind::Trait => 5,
+        EntityKind::Struct => 6,
+        EntityKind::Enum => 7,
+        EntityKind::ImplBlock => 8,
+        EntityKind::Function => 9,
+        EntityKind::Method => 10,
+        EntityKind::Macro => 11,
+        EntityKind::Test => 12,
     }
 }
 
@@ -707,5 +837,49 @@ fn depth_to_u32(depth: usize) -> u32 {
     match u32::try_from(depth) {
         Ok(depth) => depth,
         Err(_) => u32::MAX,
+    }
+}
+
+fn diff_lookup_paths(workspace_root: &Path, diff: &FileDiff) -> Vec<String> {
+    match diff {
+        FileDiff::Modified(path)
+        | FileDiff::Added(path)
+        | FileDiff::Deleted(path) => {
+            vec![relative_path_string(workspace_root, path)]
+        }
+        FileDiff::Renamed(new_path, old_path) => vec![
+            relative_path_string(workspace_root, new_path),
+            relative_path_string(workspace_root, old_path),
+        ],
+    }
+}
+
+fn diff_display_path(workspace_root: &Path, diff: &FileDiff) -> String {
+    let path = match diff {
+        FileDiff::Modified(path)
+        | FileDiff::Added(path)
+        | FileDiff::Deleted(path)
+        | FileDiff::Renamed(path, _) => path,
+    };
+    relative_path_string(workspace_root, path)
+}
+
+fn relative_path_string(workspace_root: &Path, path: &Path) -> String {
+    path.strip_prefix(workspace_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn diff_reason(diff: &FileDiff) -> String {
+    match diff {
+        FileDiff::Modified(_) => "Observed modified working-tree file.".to_string(),
+        FileDiff::Added(_) => "Observed added working-tree file.".to_string(),
+        FileDiff::Deleted(_) => "Observed deleted working-tree file.".to_string(),
+        FileDiff::Renamed(new_path, old_path) => format!(
+            "Observed renamed working-tree file from {} to {}.",
+            old_path.to_string_lossy(),
+            new_path.to_string_lossy()
+        ),
     }
 }
