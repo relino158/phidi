@@ -677,6 +677,46 @@ mod tests {
     }
 
     #[test]
+    fn timeout_envelope_preserves_partial_result_payload() {
+        let response =
+            AgentCapabilityResponse::StructuralQuery(CapabilityResponse::Timeout {
+                timeout: CapabilityTimeout {
+                    limit_ms: 200,
+                    elapsed_ms: 200,
+                },
+                partial_result: Some(StructuralQueryResult {
+                    matches: vec![StructuralQueryMatch {
+                        entity: sample_entity(),
+                        summary: "resolved one match before timeout".to_string(),
+                        certainty: Certainty::inferred(
+                            ConfidenceScore::new(82).unwrap(),
+                        ),
+                        provenance: Provenance {
+                            source: ProvenanceSource::Heuristic,
+                            detail: Some(
+                                "ranked from partial traversal".to_string(),
+                            ),
+                        },
+                    }],
+                }),
+            });
+
+        let value = serde_json::to_value(response).unwrap();
+
+        assert_eq!(
+            value["response"]["partial_result"]["matches"][0]["entity"]["id"],
+            json!("entity:1")
+        );
+        assert_eq!(
+            value["response"]["partial_result"]["matches"][0]["certainty"],
+            json!({
+                "kind": "inferred",
+                "confidence": 82
+            })
+        );
+    }
+
+    #[test]
     fn capability_requests_ignore_unknown_future_fields() {
         let request: AgentCapabilityRequest = serde_json::from_value(json!({
             "capability": "entity-briefing",

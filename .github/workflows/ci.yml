@@ -8,7 +8,7 @@ on:
       - Cargo.toml
       - Cargo.lock
       - phidi-**
-      - .github/wofklows/ci.yml
+      - .github/workflows/ci.yml
   workflow_dispatch:
 
 name: CI
@@ -25,7 +25,7 @@ jobs:
   build:
     name: Rust on ${{ matrix.os }}
     if: github.event.pull_request.draft == false
-    needs: [fmt, clippy]
+    needs: [fmt, clippy, foundation-contracts]
     strategy:
       fail-fast: false
       matrix:
@@ -102,4 +102,26 @@ jobs:
         run: cargo fetch --locked
 
       - name: Run clippy
-        run: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  foundation-contracts:
+    name: Foundation Contracts
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update toolchain
+        run: rustup update --no-self-update
+
+      - name: Install dependencies on Ubuntu
+        run: sudo make ubuntu-deps
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+
+      - name: Run foundation contract tests
+        run: cargo test -p phidi-core -p phidi-rpc -p phidi-proxy

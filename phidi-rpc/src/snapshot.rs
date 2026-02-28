@@ -305,6 +305,29 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_status_response_version_mismatch_serializes_stably() {
+        let response = SnapshotStatusResponse::VersionMismatch {
+            server_support: VersionSupport::new(
+                SchemaVersion::new(1, 1),
+                SchemaVersion::new(1, 0),
+            ),
+            mismatch: VersionMismatchStatus::ClientTooOld,
+        };
+
+        let value = serde_json::to_value(response).unwrap();
+
+        assert_eq!(value["status"], json!("version-mismatch"));
+        assert_eq!(
+            value["server_support"],
+            json!({
+                "current_schema_version": {"major": 1, "minor": 1},
+                "minimum_schema_version": {"major": 1, "minor": 0}
+            })
+        );
+        assert_eq!(value["mismatch"], json!("client-too-old"));
+    }
+
+    #[test]
     fn snapshot_status_request_ignores_unknown_future_fields() {
         let request: SnapshotStatusRequest = serde_json::from_value(json!({
             "client_support": {
