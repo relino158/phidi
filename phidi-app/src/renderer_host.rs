@@ -32,7 +32,7 @@ pub fn probe_renderer_plugin(
     let (host_support, parsed_host_api_version) =
         match parse_host_support(host_api_version) {
             Ok(host_support) => host_support,
-            Err(status) => return status,
+            Err(status) => return *status,
         };
 
     let library = match unsafe { Library::new(plugin_library) } {
@@ -78,7 +78,7 @@ pub fn probe_renderer_descriptor(
     let (host_support, parsed_host_api_version) =
         match parse_host_support(host_api_version) {
             Ok(host_support) => host_support,
-            Err(status) => return status,
+            Err(status) => return *status,
         };
 
     validate_renderer_descriptor(descriptor, &host_support, &parsed_host_api_version)
@@ -97,14 +97,14 @@ pub fn probe_builtin_default_renderer() -> RendererLoadStatus {
 
 fn parse_host_support(
     host_api_version: &str,
-) -> Result<(RendererHostSupport, Version), RendererLoadStatus> {
+) -> Result<(RendererHostSupport, Version), Box<RendererLoadStatus>> {
     let parsed_host_api_version = match Version::parse(host_api_version) {
         Ok(version) => version,
         Err(err) => {
-            return Err(RendererLoadStatus::InvalidHostApiVersion {
+            return Err(Box::new(RendererLoadStatus::InvalidHostApiVersion {
                 host_api_version: host_api_version.to_string(),
                 message: err.to_string(),
-            });
+            }));
         }
     };
 
