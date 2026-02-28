@@ -41,6 +41,12 @@ impl RustSnapshotExtractor {
     }
 }
 
+impl Default for RustSnapshotExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone)]
 struct ScopeContext {
     file_path: String,
