@@ -419,15 +419,7 @@ mod tests {
 
     #[test]
     fn schema_version_compatibility_follows_supported_range() {
-        assert!(
-            CURRENT_SCHEMA_VERSION.minor > 0,
-            "compatibility matrix requires a current schema with a previous minor"
-        );
-
-        let previous_minor = SchemaVersion::new(
-            CURRENT_SCHEMA_VERSION.major,
-            CURRENT_SCHEMA_VERSION.minor - 1,
-        );
+        let previous_minor = MINIMUM_READABLE_SCHEMA_VERSION;
         let too_old = SchemaVersion::new(
             CURRENT_SCHEMA_VERSION.major - 1,
             CURRENT_SCHEMA_VERSION.minor,

@@ -755,21 +755,13 @@ mod tests {
 
     #[test]
     fn loads_previous_minor_schema_snapshots() {
-        assert!(
-            CURRENT_SCHEMA_VERSION.minor > 0,
-            "compatibility matrix requires a current schema with a previous minor"
-        );
-
         let tempdir = tempdir().unwrap();
         let store = SnapshotStore::from_directory(tempdir.path().join("snapshots"));
         let workspace_root = workspace_root(&tempdir);
         fs::create_dir_all(&workspace_root).unwrap();
 
         let snapshot_path = snapshot_path_for(&store, &workspace_root);
-        let previous_minor = SchemaVersion::new(
-            CURRENT_SCHEMA_VERSION.major,
-            CURRENT_SCHEMA_VERSION.minor - 1,
-        );
+        let previous_minor = MINIMUM_READABLE_SCHEMA_VERSION;
         rewrite_snapshot_version(&snapshot_path, previous_minor);
 
         let SnapshotLoadResult::Loaded(snapshot) = store.load(&workspace_root).unwrap()
