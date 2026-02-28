@@ -4096,6 +4096,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "syn 2.0.94",
  "tar",
  "toml",
  "tracing 0.2.0",
