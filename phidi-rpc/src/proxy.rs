@@ -57,6 +57,18 @@ pub struct SearchMatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyInitializeParams {
+    pub workspace: Option<PathBuf>,
+    pub disabled_volts: Vec<VoltID>,
+    pub extra_plugin_paths: Vec<PathBuf>,
+    pub plugin_configurations:
+        HashMap<String, HashMap<String, serde_json::Value>>,
+    pub volt_capability_grants: HashMap<VoltID, Vec<VoltCapability>>,
+    pub window_id: usize,
+    pub tab_id: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "params")]
 pub enum ProxyRequest {
@@ -642,22 +654,16 @@ impl ProxyRpcHandler {
 
     pub fn initialize(
         &self,
-        workspace: Option<PathBuf>,
-        disabled_volts: Vec<VoltID>,
-        extra_plugin_paths: Vec<PathBuf>,
-        plugin_configurations: HashMap<String, HashMap<String, serde_json::Value>>,
-        volt_capability_grants: HashMap<VoltID, Vec<VoltCapability>>,
-        window_id: usize,
-        tab_id: usize,
+        params: ProxyInitializeParams,
     ) {
         self.notification(ProxyNotification::Initialize {
-            workspace,
-            disabled_volts,
-            extra_plugin_paths,
-            plugin_configurations,
-            volt_capability_grants,
-            window_id,
-            tab_id,
+            workspace: params.workspace,
+            disabled_volts: params.disabled_volts,
+            extra_plugin_paths: params.extra_plugin_paths,
+            plugin_configurations: params.plugin_configurations,
+            volt_capability_grants: params.volt_capability_grants,
+            window_id: params.window_id,
+            tab_id: params.tab_id,
         });
     }
 
