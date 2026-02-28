@@ -15,6 +15,7 @@ use floem::{
 use indexmap::IndexMap;
 use lsp_types::{DiagnosticSeverity, ProgressToken};
 use phidi_core::mode::{Mode, VisualMode};
+use phidi_rpc::core::{SemanticMapDegradedReason, SemanticMapStatus};
 
 use crate::{
     app::clickable_icon,
@@ -58,6 +59,7 @@ pub fn status(
     });
     let branch = source_control.branch;
     let file_diffs = source_control.file_diffs;
+    let semantic_map_status = window_tab_data.common.semantic_map_status;
     let branch = move || {
         format!(
             "{}{}",
@@ -169,6 +171,7 @@ pub fn status(
             {
                 let panel = panel.clone();
                 stack((
+                    semantic_map_status_view(config, semantic_map_status),
                     svg(move || config.get().ui_svg(PhidiIcons::ERROR)).style(
                         move |s| {
                             let config = config.get();
@@ -408,6 +411,60 @@ pub fn status(
     .debug_name("Status/Bottom Bar")
 }
 
+fn semantic_map_status_view(
+    config: ReadSignal<Arc<PhidiConfig>>,
+    semantic_map_status: RwSignal<SemanticMapStatus>,
+) -> impl View {
+    stack((
+        svg(move || config.get().ui_svg(PhidiIcons::WARNING)).style(move |s| {
+            let config = config.get();
+            let size = config.ui.icon_size() as f32;
+            s.size(size, size)
+                .color(config.color(PhidiColor::PHIDI_WARN))
+        }),
+        label(move || {
+            semantic_map_status_label(&semantic_map_status.get())
+                .unwrap_or_default()
+                .to_string()
+        })
+        .style(move |s| {
+            s.margin_left(5.0)
+                .color(config.get().color(PhidiColor::PHIDI_WARN))
+                .selectable(false)
+        }),
+    ))
+    .style(move |s| {
+        s.display(
+            if semantic_map_status_label(&semantic_map_status.get()).is_some() {
+                Display::Flex
+            } else {
+                Display::None
+            },
+        )
+        .height_pct(100.0)
+        .padding_horiz(10.0)
+        .items_center()
+    })
+}
+
+fn semantic_map_status_label(status: &SemanticMapStatus) -> Option<&'static str> {
+    match status {
+        SemanticMapStatus::Ready => None,
+        SemanticMapStatus::Degraded {
+            reason: SemanticMapDegradedReason::PartialSnapshot,
+            ..
+        } => Some("Map partial"),
+        SemanticMapStatus::Degraded {
+            reason: SemanticMapDegradedReason::SnapshotRecovery,
+            ..
+        } => Some("Map recovering"),
+        SemanticMapStatus::Degraded {
+            reason: SemanticMapDegradedReason::StorageUnavailable,
+            ..
+        } => Some("Map unavailable"),
+    }
+}
+
 fn progress_view(
     config: ReadSignal<Arc<PhidiConfig>>,
     progresses: RwSignal<IndexMap<ProgressToken, WorkProgress>>,
@@ -470,4 +527,41 @@ fn status_text<S: std::fmt::Display + 'static>(
             })
             .selectable(false)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use phidi_rpc::core::{SemanticMapDegradedReason, SemanticMapStatus};
+
+    use super::semantic_map_status_label;
+
+    #[test]
+    fn semantic_map_status_label_is_hidden_when_ready() {
+        assert_eq!(semantic_map_status_label(&SemanticMapStatus::Ready), None);
+    }
+
+    #[test]
+    fn semantic_map_status_label_distinguishes_degraded_modes() {
+        assert_eq!(
+            semantic_map_status_label(&SemanticMapStatus::Degraded {
+                reason: SemanticMapDegradedReason::PartialSnapshot,
+                detail: "partial".to_string(),
+            }),
+            Some("Map partial")
+        );
+        assert_eq!(
+            semantic_map_status_label(&SemanticMapStatus::Degraded {
+                reason: SemanticMapDegradedReason::SnapshotRecovery,
+                detail: "recovery".to_string(),
+            }),
+            Some("Map recovering")
+        );
+        assert_eq!(
+            semantic_map_status_label(&SemanticMapStatus::Degraded {
+                reason: SemanticMapDegradedReason::StorageUnavailable,
+                detail: "storage".to_string(),
+            }),
+            Some("Map unavailable")
+        );
+    }
 }

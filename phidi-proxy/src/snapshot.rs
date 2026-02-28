@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{self, BufWriter},
+    io::{self, BufWriter, Write},
     path::{Path, PathBuf},
 };
 
@@ -10,19 +10,50 @@ use phidi_core::{
     directory::Directory,
     semantic_map::{
         CURRENT_SCHEMA_VERSION, SchemaCompatibility, SchemaVersion,
-        SnapshotFreshness, SnapshotProvenance, WorkspaceSnapshot,
+        SnapshotCompleteness, SnapshotFreshness, SnapshotProvenance,
+        WorkspaceSnapshot,
     },
 };
-use phidi_rpc::core::{CoreRpcHandler, LogLevel};
+use phidi_rpc::core::{
+    CoreRpcHandler, LogLevel, SemanticMapDegradedReason, SemanticMapStatus,
+};
 use serde::Deserialize;
 
 const SNAPSHOT_DIRECTORY: &str = "atlas/snapshots";
 const SNAPSHOT_FILE_NAME: &str = "workspace_snapshot.json";
 const SNAPSHOT_LOG_TARGET: &str = "atlas.snapshot";
 
+pub trait SnapshotStorage {
+    type Writer: Write;
+
+    fn create_dir_all(&self, path: &Path) -> io::Result<()>;
+    fn create_file(&self, path: &Path) -> io::Result<Self::Writer>;
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+}
+
+#[derive(Debug, Default)]
+pub struct FileSystemSnapshotStorage;
+
+impl SnapshotStorage for FileSystemSnapshotStorage {
+    type Writer = fs::File;
+
+    fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+        fs::create_dir_all(path)
+    }
+
+    fn create_file(&self, path: &Path) -> io::Result<Self::Writer> {
+        fs::File::create(path)
+    }
+
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        fs::read(path)
+    }
+}
+
 #[derive(Debug)]
-pub struct SnapshotStore {
+pub struct SnapshotStore<S = FileSystemSnapshotStorage> {
     root: PathBuf,
+    storage: S,
 }
 
 impl SnapshotStore {
@@ -30,13 +61,21 @@ impl SnapshotStore {
         let root = Directory::cache_directory()
             .ok_or_else(|| anyhow!("can't get cache directory"))?
             .join(SNAPSHOT_DIRECTORY);
-        Ok(Self { root })
+        Ok(Self::from_directory(root))
     }
 
     pub fn from_directory(root: PathBuf) -> Self {
-        Self { root }
+        Self::new(root, FileSystemSnapshotStorage)
     }
+}
 
+impl<S> SnapshotStore<S> {
+    pub fn new(root: PathBuf, storage: S) -> Self {
+        Self { root, storage }
+    }
+}
+
+impl<S: SnapshotStorage> SnapshotStore<S> {
     pub fn save(
         &self,
         workspace_root: &Path,
@@ -53,11 +92,11 @@ impl SnapshotStore {
         let parent = snapshot_path
             .parent()
             .ok_or_else(|| anyhow!("snapshot path missing parent"))?;
-        fs::create_dir_all(parent).with_context(|| {
+        self.storage.create_dir_all(parent).with_context(|| {
             format!("failed to create snapshot directory {}", parent.display())
         })?;
 
-        let file = fs::File::create(&snapshot_path).with_context(|| {
+        let file = self.storage.create_file(&snapshot_path).with_context(|| {
             format!("failed to create snapshot file {}", snapshot_path.display())
         })?;
         let writer = BufWriter::new(file);
@@ -70,7 +109,7 @@ impl SnapshotStore {
 
     pub fn load(&self, workspace_root: &Path) -> Result<SnapshotLoadResult> {
         let snapshot_path = self.path_for_workspace(workspace_root);
-        let bytes = match fs::read(&snapshot_path) {
+        let bytes = match self.storage.read(&snapshot_path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Ok(SnapshotLoadResult::Recovery(
@@ -197,6 +236,32 @@ struct SnapshotHeader {
     schema_version: SchemaVersion,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct StartupSnapshotState {
+    status: SemanticMapStatus,
+    log_message: Option<String>,
+}
+
+impl StartupSnapshotState {
+    fn ready() -> Self {
+        Self {
+            status: SemanticMapStatus::Ready,
+            log_message: None,
+        }
+    }
+
+    fn degraded(
+        reason: SemanticMapDegradedReason,
+        detail: String,
+        log_message: Option<String>,
+    ) -> Self {
+        Self {
+            status: SemanticMapStatus::Degraded { reason, detail },
+            log_message,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SnapshotFreshnessStatus {
     pub freshness: SnapshotFreshness,
@@ -292,47 +357,97 @@ pub(crate) fn load_workspace_snapshot_for_startup(
             );
         }
         Err(error) => {
-            core_rpc.log(
-                LogLevel::Warn,
-                format!(
-                    "Atlas snapshot storage unavailable for {}: {}",
-                    workspace_root.display(),
-                    error
-                ),
-                Some(SNAPSHOT_LOG_TARGET.to_string()),
+            emit_startup_snapshot_state(
+                core_rpc,
+                startup_storage_unavailable_state(workspace_root, &error),
             );
         }
     }
 }
 
-fn load_workspace_snapshot_for_startup_with_store(
-    store: &SnapshotStore,
+fn load_workspace_snapshot_for_startup_with_store<S: SnapshotStorage>(
+    store: &SnapshotStore<S>,
     core_rpc: &CoreRpcHandler,
     workspace_root: &Path,
 ) {
+    emit_startup_snapshot_state(
+        core_rpc,
+        startup_snapshot_state(store, workspace_root),
+    );
+}
+
+fn startup_snapshot_state<S: SnapshotStorage>(
+    store: &SnapshotStore<S>,
+    workspace_root: &Path,
+) -> StartupSnapshotState {
     match store.load(workspace_root) {
-        Ok(SnapshotLoadResult::Loaded(_snapshot)) => {}
-        Ok(SnapshotLoadResult::Recovery(status)) => {
-            if let Some(message) = status.log_message() {
-                core_rpc.log(
-                    LogLevel::Warn,
-                    message,
-                    Some(SNAPSHOT_LOG_TARGET.to_string()),
+        Ok(SnapshotLoadResult::Loaded(snapshot)) => {
+            if snapshot.completeness == SnapshotCompleteness::Partial {
+                let detail = format!(
+                    "Loaded partial workspace snapshot for {} with {} diagnostic{}.",
+                    workspace_root.display(),
+                    snapshot.diagnostics.len(),
+                    if snapshot.diagnostics.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                );
+                return StartupSnapshotState::degraded(
+                    SemanticMapDegradedReason::PartialSnapshot,
+                    detail.clone(),
+                    Some(detail),
                 );
             }
+            StartupSnapshotState::ready()
         }
-        Err(error) => {
-            core_rpc.log(
-                LogLevel::Warn,
-                format!(
-                    "Atlas snapshot storage unavailable for {}: {}",
-                    workspace_root.display(),
-                    error
-                ),
-                Some(SNAPSHOT_LOG_TARGET.to_string()),
-            );
+        Ok(SnapshotLoadResult::Recovery(status)) => {
+            if let Some(message) = status.log_message() {
+                StartupSnapshotState::degraded(
+                    SemanticMapDegradedReason::SnapshotRecovery,
+                    message.clone(),
+                    Some(message),
+                )
+            } else {
+                StartupSnapshotState::ready()
+            }
         }
+        Err(error) => startup_storage_unavailable_state(workspace_root, &error),
     }
+}
+
+fn startup_storage_unavailable_state(
+    workspace_root: &Path,
+    error: &anyhow::Error,
+) -> StartupSnapshotState {
+    let message = format!(
+        "Atlas snapshot storage unavailable for {}: {}",
+        workspace_root.display(),
+        error
+    );
+    StartupSnapshotState::degraded(
+        SemanticMapDegradedReason::StorageUnavailable,
+        message.clone(),
+        Some(message),
+    )
+}
+
+fn emit_startup_snapshot_state(
+    core_rpc: &CoreRpcHandler,
+    state: StartupSnapshotState,
+) {
+    let StartupSnapshotState {
+        status,
+        log_message,
+    } = state;
+    if let Some(message) = log_message {
+        core_rpc.log(
+            LogLevel::Warn,
+            message,
+            Some(SNAPSHOT_LOG_TARGET.to_string()),
+        );
+    }
+    core_rpc.semantic_map_status(status);
 }
 
 fn current_revision(repo: &Repository) -> Result<Option<String>> {
@@ -395,21 +510,26 @@ fn workspace_directory_name(workspace_root: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path, path::PathBuf};
+    use std::{fs, io, path::Path, path::PathBuf, time::Duration};
 
     use git2::{Repository, Signature};
     use phidi_core::semantic_map::{
-        CURRENT_SCHEMA_VERSION, SchemaCompatibility, SchemaVersion, SnapshotKind,
-        SnapshotFreshness, SnapshotProvenance, WorkspaceSnapshot,
+        CURRENT_SCHEMA_VERSION, SchemaCompatibility, SchemaVersion,
+        SnapshotCompleteness, SnapshotDiagnostic, SnapshotFreshness, SnapshotKind,
+        SnapshotProvenance, WorkspaceSnapshot,
     };
-    use phidi_rpc::core::{CoreNotification, CoreRpc, CoreRpcHandler, LogLevel};
+    use phidi_rpc::core::{
+        CoreNotification, CoreRpc, CoreRpcHandler, LogLevel,
+        SemanticMapDegradedReason, SemanticMapStatus,
+    };
     use serde_json::json;
     use tempfile::tempdir;
 
     use super::{
         RebuildGuidance, SNAPSHOT_LOG_TARGET, SnapshotLoadResult,
-        SnapshotRecoveryStatus, SnapshotStore, capture_workspace_provenance,
-        evaluate_snapshot_freshness, load_workspace_snapshot_for_startup_with_store,
+        SnapshotRecoveryStatus, SnapshotStorage, SnapshotStore,
+        capture_workspace_provenance, evaluate_snapshot_freshness,
+        load_workspace_snapshot_for_startup_with_store,
     };
 
     fn snapshot_fixture() -> WorkspaceSnapshot {
@@ -432,6 +552,53 @@ mod tests {
     ) -> PathBuf {
         let snapshot = snapshot_fixture();
         store.save(workspace_root, &snapshot).unwrap()
+    }
+
+    fn recv_notification(core_rpc: &CoreRpcHandler) -> CoreNotification {
+        let message = core_rpc
+            .rx()
+            .recv_timeout(Duration::from_secs(1))
+            .expect("expected notification");
+        let CoreRpc::Notification(notification) = message else {
+            panic!("expected notification");
+        };
+        *notification
+    }
+
+    #[derive(Clone, Copy)]
+    enum FailingOperation {
+        CreateDirAll,
+        CreateFile,
+        Read,
+    }
+
+    struct FailingStorage {
+        operation: FailingOperation,
+    }
+
+    impl SnapshotStorage for FailingStorage {
+        type Writer = Vec<u8>;
+
+        fn create_dir_all(&self, _path: &Path) -> io::Result<()> {
+            if matches!(self.operation, FailingOperation::CreateDirAll) {
+                return Err(io::Error::other("injected create_dir_all failure"));
+            }
+            Ok(())
+        }
+
+        fn create_file(&self, _path: &Path) -> io::Result<Self::Writer> {
+            if matches!(self.operation, FailingOperation::CreateFile) {
+                return Err(io::Error::other("injected create_file failure"));
+            }
+            Ok(Vec::new())
+        }
+
+        fn read(&self, _path: &Path) -> io::Result<Vec<u8>> {
+            if matches!(self.operation, FailingOperation::Read) {
+                return Err(io::Error::other("injected read failure"));
+            }
+            Ok(Vec::new())
+        }
     }
 
     #[test]
@@ -463,9 +630,63 @@ mod tests {
 
         let error = store.save(&workspace_root, &snapshot).unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("refusing to persist snapshot schema"));
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to persist snapshot schema")
+        );
+    }
+
+    #[test]
+    fn save_reports_injected_directory_creation_failures() {
+        let tempdir = tempdir().unwrap();
+        let store = SnapshotStore::new(
+            tempdir.path().join("snapshots"),
+            FailingStorage {
+                operation: FailingOperation::CreateDirAll,
+            },
+        );
+        let workspace_root = workspace_root(&tempdir);
+
+        let error = store
+            .save(&workspace_root, &snapshot_fixture())
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to create snapshot directory")
+        );
+        assert!(
+            error
+                .root_cause()
+                .to_string()
+                .contains("injected create_dir_all failure")
+        );
+    }
+
+    #[test]
+    fn save_reports_injected_file_creation_failures() {
+        let tempdir = tempdir().unwrap();
+        let store = SnapshotStore::new(
+            tempdir.path().join("snapshots"),
+            FailingStorage {
+                operation: FailingOperation::CreateFile,
+            },
+        );
+        let workspace_root = workspace_root(&tempdir);
+
+        let error = store
+            .save(&workspace_root, &snapshot_fixture())
+            .unwrap_err();
+
+        assert!(error.to_string().contains("failed to create snapshot file"));
+        assert!(
+            error
+                .root_cause()
+                .to_string()
+                .contains("injected create_file failure")
+        );
     }
 
     #[test]
@@ -544,6 +765,29 @@ mod tests {
     }
 
     #[test]
+    fn load_reports_injected_read_failures() {
+        let tempdir = tempdir().unwrap();
+        let store = SnapshotStore::new(
+            tempdir.path().join("snapshots"),
+            FailingStorage {
+                operation: FailingOperation::Read,
+            },
+        );
+        let workspace_root = workspace_root(&tempdir);
+        fs::create_dir_all(&workspace_root).unwrap();
+
+        let error = store.load(&workspace_root).unwrap_err();
+
+        assert!(error.to_string().contains("failed to read snapshot"));
+        assert!(
+            error
+                .root_cause()
+                .to_string()
+                .contains("injected read failure")
+        );
+    }
+
+    #[test]
     fn startup_safe_load_path_logs_and_recovers_from_incompatible_snapshots() {
         let tempdir = tempdir().unwrap();
         let store_root = tempdir.path().join("snapshots");
@@ -571,15 +815,11 @@ mod tests {
             &workspace_root,
         );
 
-        let CoreRpc::Notification(notification) = core_rpc.rx().recv().unwrap()
-        else {
-            panic!("expected startup log notification");
-        };
         let CoreNotification::Log {
             level,
             message,
             target,
-        } = *notification
+        } = recv_notification(&core_rpc)
         else {
             panic!("expected log notification");
         };
@@ -587,6 +827,116 @@ mod tests {
         assert!(matches!(level, LogLevel::Warn));
         assert_eq!(target.as_deref(), Some(SNAPSHOT_LOG_TARGET));
         assert!(message.contains("Ignoring incompatible workspace snapshot"));
+
+        let CoreNotification::SemanticMapStatus { status } =
+            recv_notification(&core_rpc)
+        else {
+            panic!("expected semantic-map status notification");
+        };
+        assert!(matches!(
+            status,
+            SemanticMapStatus::Degraded {
+                reason: SemanticMapDegradedReason::SnapshotRecovery,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn startup_safe_load_path_marks_partial_snapshots_as_degraded() {
+        let tempdir = tempdir().unwrap();
+        let store_root = tempdir.path().join("snapshots");
+        let store = SnapshotStore::from_directory(store_root.clone());
+        let workspace_root = workspace_root(&tempdir);
+        fs::create_dir_all(&workspace_root).unwrap();
+
+        let mut snapshot = snapshot_fixture();
+        snapshot.completeness = SnapshotCompleteness::Partial;
+        snapshot.diagnostics.push(SnapshotDiagnostic {
+            code: Some("parse-file".to_string()),
+            severity: phidi_core::semantic_map::DiagnosticSeverity::Warning,
+            message: "failed to parse Rust source file".to_string(),
+            location: None,
+        });
+        store.save(&workspace_root, &snapshot).unwrap();
+
+        let core_rpc = CoreRpcHandler::new();
+        let startup_store = SnapshotStore::from_directory(store_root);
+        load_workspace_snapshot_for_startup_with_store(
+            &startup_store,
+            &core_rpc,
+            &workspace_root,
+        );
+
+        let CoreNotification::Log {
+            level,
+            message,
+            target,
+        } = recv_notification(&core_rpc)
+        else {
+            panic!("expected log notification");
+        };
+        assert!(matches!(level, LogLevel::Warn));
+        assert_eq!(target.as_deref(), Some(SNAPSHOT_LOG_TARGET));
+        assert!(message.contains("Loaded partial workspace snapshot"));
+
+        let CoreNotification::SemanticMapStatus { status } =
+            recv_notification(&core_rpc)
+        else {
+            panic!("expected semantic-map status notification");
+        };
+        assert!(matches!(
+            status,
+            SemanticMapStatus::Degraded {
+                reason: SemanticMapDegradedReason::PartialSnapshot,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn startup_safe_load_path_marks_storage_failures_as_degraded() {
+        let tempdir = tempdir().unwrap();
+        let workspace_root = workspace_root(&tempdir);
+        fs::create_dir_all(&workspace_root).unwrap();
+        let store = SnapshotStore::new(
+            tempdir.path().join("snapshots"),
+            FailingStorage {
+                operation: FailingOperation::Read,
+            },
+        );
+
+        let core_rpc = CoreRpcHandler::new();
+        load_workspace_snapshot_for_startup_with_store(
+            &store,
+            &core_rpc,
+            &workspace_root,
+        );
+
+        let CoreNotification::Log {
+            level,
+            message,
+            target,
+        } = recv_notification(&core_rpc)
+        else {
+            panic!("expected log notification");
+        };
+        assert!(matches!(level, LogLevel::Warn));
+        assert_eq!(target.as_deref(), Some(SNAPSHOT_LOG_TARGET));
+        assert!(message.contains("Atlas snapshot storage unavailable"));
+
+        let CoreNotification::SemanticMapStatus { status } =
+            recv_notification(&core_rpc)
+        else {
+            panic!("expected semantic-map status notification");
+        };
+        assert!(matches!(
+            status,
+            SemanticMapStatus::Degraded {
+                reason: SemanticMapDegradedReason::StorageUnavailable,
+                ..
+            }
+        ));
     }
 
     #[test]
