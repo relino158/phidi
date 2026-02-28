@@ -24,6 +24,7 @@ regex              = { workspace = true }
 reqwest            = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
+syn                = { version = "2.0", features = ["full", "parsing", "visit"] }
 tar                = { workspace = true }
 toml               = { workspace = true }
 tracing            = { workspace = true }
@@ -71,5 +72,4 @@ git    = "https://github.com/lapce/locale_config.git"
 branch = "lapce"
 
 [dev-dependencies]
-syn = { version = "2.0", features = ["full", "parsing", "visit"] }
 tempfile = { workspace = true }
