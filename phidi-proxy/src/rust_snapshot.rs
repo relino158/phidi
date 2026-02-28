@@ -13,12 +13,11 @@ use phidi_core::semantic_map::{
     WorkspaceSnapshot,
 };
 use syn::{
-    parse_file,
-    punctuated::Punctuated,
-    visit::{self, Visit},
     Attribute, Expr, ExprCall, ExprMethodCall, File, ImplItem, Item, ItemFn,
     ItemImpl, ItemMacro, ItemMod, ItemTrait, ItemUse, Path as SynPath, Token,
-    TraitItem, Type, UseTree,
+    TraitItem, Type, UseTree, parse_file,
+    punctuated::Punctuated,
+    visit::{self, Visit},
 };
 use walkdir::WalkDir;
 

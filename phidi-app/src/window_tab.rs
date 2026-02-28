@@ -40,7 +40,7 @@ use phidi_core::{
 };
 use phidi_rpc::{
     RpcError,
-    core::CoreNotification,
+    core::{CoreNotification, SemanticMapStatus},
     dap_types::{ConfigSource, RunDebugConfig},
     file::{Naming, PathObject},
     plugin::PluginId,
@@ -153,6 +153,7 @@ pub struct CommonData {
     pub dragging: RwSignal<Option<DragContent>>,
     pub config: ReadSignal<Arc<PhidiConfig>>,
     pub proxy_status: RwSignal<Option<ProxyStatus>>,
+    pub semantic_map_status: RwSignal<SemanticMapStatus>,
     pub mouse_hover_timer: RwSignal<TimerToken>,
     pub breakpoints: RwSignal<BTreeMap<PathBuf, BTreeMap<usize, PhidiBreakpoint>>>,
     // the current focused view which will receive keyboard events
@@ -320,6 +321,7 @@ impl WindowTabData {
         let internal_command = Listener::new_empty(cx);
         let keypress = cx.create_rw_signal(KeyPressData::new(cx, &config));
         let proxy_status = cx.create_rw_signal(None);
+        let semantic_map_status = cx.create_rw_signal(SemanticMapStatus::Ready);
 
         let (term_tx, term_rx) = channel();
         let (term_notification_tx, term_notification_rx) = channel();
@@ -388,6 +390,7 @@ impl WindowTabData {
             workbench_size: cx.create_rw_signal(Size::ZERO),
             config,
             proxy_status,
+            semantic_map_status,
             mouse_hover_timer: cx.create_rw_signal(TimerToken::INVALID),
             window_origin: cx.create_rw_signal(Point::ZERO),
             breakpoints: cx.create_rw_signal(BTreeMap::new()),
@@ -2107,6 +2110,9 @@ impl WindowTabData {
         match rpc {
             CoreNotification::ProxyStatus { status } => {
                 self.common.proxy_status.set(Some(status.to_owned()));
+            }
+            CoreNotification::SemanticMapStatus { status } => {
+                self.common.semantic_map_status.set(status.to_owned());
             }
             CoreNotification::DiffInfo { diff } => {
                 self.source_control.branch.set(diff.head.clone());

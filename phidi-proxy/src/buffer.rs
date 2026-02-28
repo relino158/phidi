@@ -8,12 +8,12 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use floem_editor_core::buffer::rope_text::CharIndicesJoin;
 use lsp_types::*;
 use phidi_core::encoding::offset_utf8_to_utf16;
 use phidi_rpc::buffer::BufferId;
-use phidi_xi_rope::{interval::IntervalBounds, rope::Rope, RopeDelta};
+use phidi_xi_rope::{RopeDelta, interval::IntervalBounds, rope::Rope};
 
 #[derive(Clone)]
 pub struct Buffer {

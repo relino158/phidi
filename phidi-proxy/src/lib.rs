@@ -11,22 +11,22 @@ pub mod terminal;
 pub mod watcher;
 
 use std::{
-    io::{stdin, stdout, BufReader},
+    io::{BufReader, stdin, stdout},
     process::exit,
     sync::Arc,
     thread,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::Parser;
 use dispatch::Dispatcher;
 use phidi_core::{directory::Directory, meta};
 use phidi_rpc::{
+    RpcMessage,
     core::{CoreRpc, CoreRpcHandler},
     file::PathObject,
     proxy::{ProxyMessage, ProxyNotification, ProxyRpcHandler},
     stdio::stdio_transport,
-    RpcMessage,
 };
 use tracing::error;
 

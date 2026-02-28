@@ -3,30 +3,31 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     thread,
     time::Duration,
 };
 
 use alacritty_terminal::{event::WindowSize, event_loop::Msg};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::Sender;
 use git2::{
-    build::CheckoutBuilder, DiffOptions, ErrorCode::NotFound, Oid, Repository,
+    DiffOptions, ErrorCode::NotFound, Oid, Repository, build::CheckoutBuilder,
 };
 use grep_matcher::Matcher;
 use grep_regex::RegexMatcherBuilder;
-use grep_searcher::{sinks::UTF8, SearcherBuilder};
+use grep_searcher::{SearcherBuilder, sinks::UTF8};
 use indexmap::IndexMap;
 use lsp_types::{
-    notification::{Cancel, Notification},
     CancelParams, MessageType, NumberOrString, Position, Range, ShowMessageParams,
     TextDocumentItem, Url,
+    notification::{Cancel, Notification},
 };
 use parking_lot::Mutex;
 use phidi_rpc::{
+    RequestId, RpcError,
     buffer::BufferId,
     core::{CoreNotification, CoreRpcHandler, FileChanged},
     file::FileNodeItem,
@@ -38,13 +39,12 @@ use phidi_rpc::{
     source_control::{DiffInfo, FileDiff},
     style::{LineStyle, SemanticStyles},
     terminal::TermId,
-    RequestId, RpcError,
 };
 use phidi_xi_rope::Rope;
 
 use crate::{
-    buffer::{get_mod_time, load_file, Buffer},
-    plugin::{catalog::PluginCatalog, PluginCatalogRpcHandler},
+    buffer::{Buffer, get_mod_time, load_file},
+    plugin::{PluginCatalogRpcHandler, catalog::PluginCatalog},
     snapshot::load_workspace_snapshot_for_startup,
     terminal::{Terminal, TerminalSender},
     watcher::{FileWatcher, Notify, WatchToken},

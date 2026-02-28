@@ -40,12 +40,34 @@ pub enum FileChanged {
     Delete,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticMapDegradedReason {
+    PartialSnapshot,
+    SnapshotRecovery,
+    StorageUnavailable,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[serde(tag = "state", content = "params")]
+pub enum SemanticMapStatus {
+    Ready,
+    Degraded {
+        reason: SemanticMapDegradedReason,
+        detail: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "params")]
 pub enum CoreNotification {
     ProxyStatus {
         status: ProxyStatus,
+    },
+    SemanticMapStatus {
+        status: SemanticMapStatus,
     },
     OpenFileChanged {
         path: PathBuf,
@@ -252,6 +274,10 @@ impl CoreRpcHandler {
 
     pub fn workspace_file_change(&self) {
         self.notification(CoreNotification::WorkspaceFileChange);
+    }
+
+    pub fn semantic_map_status(&self, status: SemanticMapStatus) {
+        self.notification(CoreNotification::SemanticMapStatus { status });
     }
 
     pub fn diff_info(&self, diff: DiffInfo) {
