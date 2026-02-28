@@ -69,3 +69,6 @@ rev = "21419eb785cb583ead180f25a9685fa16de7f326"
 [target.'cfg(target_os = "macos")'.dependencies.locale_config]
 git    = "https://github.com/lapce/locale_config.git"
 branch = "lapce"
+
+[dev-dependencies]
+syn = { version = "2.0", features = ["full", "parsing", "visit"] }

@@ -4,6 +4,11 @@
 
 You are working on the feature specified in `atlas-agent-artifacts/`. Refer to the top-level documents inside that folder for more information. You will be assigned one task from the `atlas-agent-artifacts/tasks/` directory. Tasks not assigned to you are explicitly out of scope.
 
+- At the start of your task, you MUST:
+1. start on git branch `experiments/atlas`
+2. ensure it's up to date with `origin/experiments/atlas`
+3. branch off to `experiments/atlas-{task_id}` (e.g., `experiments/atlas-a01`) and work there.
+
 ## Tools
 
 ### Context7
@@ -51,6 +56,7 @@ If you need to perform computations as part of your reasoning (e.g., arithmetic,
 
 ### 1. General rules
 
+- you MUST use red->green TDD; tests SHOULD start with a meaningful red state or, failed that, validate an initial green state is not a false positive.
 - two near-identical entities that are heavily referenced should be refactored
 - two near-identical entities that are referenced a few times only are ok, when the third of these entities appears, refactor
 - keep definitions small and concerns separate
