@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use phidi_core::semantic_map::{
     Certainty as SemanticCertainty, CertaintyKind as SemanticCertaintyKind,
@@ -6,11 +6,12 @@ use phidi_core::semantic_map::{
     SemanticEntity, SemanticRelationship, WorkspaceSnapshot,
 };
 use phidi_rpc::agent::{
-    AgentEntity, AgentEntityKind, AgentRelationshipKind, CapabilityError,
-    CapabilityErrorCode, CapabilityResponse, ConceptDiscoveryRequest,
-    ConceptDiscoveryResult, ConceptMatch, EntityBriefingRequest,
-    EntityBriefingResult, EntityLocation, EntitySelector, Provenance,
-    ProvenanceSource, RelatedEntity, RelationshipDirection, TextPoint, TextSpan,
+    AgentEntity, AgentEntityKind, AgentRelationshipKind, BlastRadiusRequest,
+    BlastRadiusResult, CapabilityError, CapabilityErrorCode, CapabilityResponse,
+    ConceptDiscoveryRequest, ConceptDiscoveryResult, ConceptMatch,
+    EntityBriefingRequest, EntityBriefingResult, EntityLocation, EntitySelector,
+    ImpactTarget, Provenance, ProvenanceSource, RelatedEntity,
+    RelationshipDirection, TextPoint, TextSpan, UnresolvedReference,
 };
 
 const CONCEPT_PREVIEW_RELATIONSHIP_LIMIT: usize = 2;
@@ -193,6 +194,96 @@ impl<'a> SnapshotQueryService<'a> {
         }
     }
 
+    pub fn blast_radius_estimation(
+        &self,
+        request: BlastRadiusRequest,
+    ) -> CapabilityResponse<BlastRadiusResult> {
+        let Some(entity) = self.resolve_entity(&request.entity) else {
+            return CapabilityResponse::Error {
+                error: invalid_request_error(&request.entity),
+            };
+        };
+
+        let max_depth = usize_limit(request.max_depth);
+        if max_depth == 0 {
+            return CapabilityResponse::Success {
+                result: BlastRadiusResult {
+                    direct_impacts: Vec::new(),
+                    indirect_impacts: Vec::new(),
+                    unresolved_references: Vec::new(),
+                },
+            };
+        }
+
+        let mut direct_impacts = Vec::new();
+        let mut indirect_impacts = Vec::new();
+        let mut unresolved_references = Vec::new();
+        let mut queue = VecDeque::from([(entity, 0usize)]);
+        let mut visited_depths = BTreeMap::from([(entity.id.0.as_str(), 0usize)]);
+
+        while let Some((current, depth)) = queue.pop_front() {
+            if depth >= max_depth {
+                continue;
+            }
+
+            let Some(relationships) =
+                self.inbound_by_target.get(current.id.0.as_str())
+            else {
+                continue;
+            };
+
+            for relationship in relationships {
+                let source_id = relationship.source.0.as_str();
+                let next_depth = depth + 1;
+                let Some(impacted_entity) =
+                    self.entities_by_id.get(source_id).copied()
+                else {
+                    unresolved_references
+                        .push(self.unresolved_reference(current, relationship));
+                    continue;
+                };
+
+                if visited_depths.contains_key(source_id) {
+                    continue;
+                }
+                visited_depths.insert(source_id, next_depth);
+
+                let impact = self.impact_target(
+                    current,
+                    impacted_entity,
+                    relationship,
+                    next_depth,
+                );
+                if next_depth == 1 {
+                    direct_impacts.push(impact);
+                } else {
+                    indirect_impacts.push(impact);
+                }
+
+                if next_depth < max_depth {
+                    queue.push_back((impacted_entity, next_depth));
+                }
+            }
+        }
+
+        unresolved_references.sort_by(|left, right| {
+            left.description
+                .cmp(&right.description)
+                .then_with(|| {
+                    left.certainty.confidence.cmp(&right.certainty.confidence)
+                })
+                .then_with(|| left.provenance.detail.cmp(&right.provenance.detail))
+        });
+
+        CapabilityResponse::Success {
+            result: BlastRadiusResult {
+                direct_impacts,
+                indirect_impacts,
+                unresolved_references,
+            },
+        }
+    }
+
     pub(crate) fn resolve_entity(
         &self,
         selector: &EntitySelector,
@@ -369,6 +460,44 @@ impl<'a> SnapshotQueryService<'a> {
             certainty: map_certainty(relationship.certainty),
             provenance: map_provenance(&relationship.provenance),
         })
+    }
+
+    fn impact_target(
+        &self,
+        focal_entity: &SemanticEntity,
+        impacted_entity: &SemanticEntity,
+        relationship: &SemanticRelationship,
+        depth: usize,
+    ) -> ImpactTarget {
+        ImpactTarget {
+            entity: self.agent_entity(impacted_entity),
+            depth: depth_to_u32(depth),
+            reason: Some(relationship_summary(
+                RelationshipDirection::Inbound,
+                relationship.kind,
+                &focal_entity.name,
+                &impacted_entity.name,
+            )),
+            certainty: map_certainty(relationship.certainty),
+            provenance: map_provenance(&relationship.provenance),
+        }
+    }
+
+    fn unresolved_reference(
+        &self,
+        focal_entity: &SemanticEntity,
+        relationship: &SemanticRelationship,
+    ) -> UnresolvedReference {
+        UnresolvedReference {
+            description: format!(
+                "Unresolved {} relationship from `{}` to `{}`.",
+                relationship_verb(relationship.kind),
+                relationship.source.0,
+                focal_entity.name
+            ),
+            certainty: map_certainty(relationship.certainty),
+            provenance: map_provenance(&relationship.provenance),
+        }
     }
 }
 
@@ -571,5 +700,12 @@ fn usize_limit(limit: u32) -> usize {
     match usize::try_from(limit) {
         Ok(limit) => limit,
         Err(_) => usize::MAX,
+    }
+}
+
+fn depth_to_u32(depth: usize) -> u32 {
+    match u32::try_from(depth) {
+        Ok(depth) => depth,
+        Err(_) => u32::MAX,
     }
 }
