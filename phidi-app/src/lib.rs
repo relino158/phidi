@@ -31,6 +31,7 @@ pub mod panel;
 pub mod plugin;
 pub mod proxy;
 pub mod rename;
+pub mod renderer_host;
 pub mod settings;
 pub mod snippet;
 pub mod source_control;
